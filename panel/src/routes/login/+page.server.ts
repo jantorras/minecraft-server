@@ -20,7 +20,12 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const username = field(form, 'username');
 		const password = typeof form.get('password') === 'string' ? (form.get('password') as string) : '';
-		const key = `${getClientAddress()}|${username.toLowerCase()}`;
+		// Darrere del túnel de Cloudflare totes les peticions arriben des de la mateixa VM
+		// (cloudflared): l'adreça real és a la capçalera. Només es creu si ve d'allà mateix.
+		const peer = getClientAddress();
+		const local = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
+		const address = (local && request.headers.get('cf-connecting-ip')) || peer;
+		const key = `${address}|${username.toLowerCase()}`;
 
 		if (isLocked(key)) {
 			return fail(429, { username, error: 'Massa intents. Torna-ho a provar d’aquí a 15 minuts.' });
