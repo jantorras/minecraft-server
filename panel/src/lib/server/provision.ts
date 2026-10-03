@@ -14,6 +14,7 @@ import {
 	containerName,
 	deleteServerRow,
 	getServer,
+	markSetupDone,
 	mcRoot,
 	setServerStatus,
 	type McServer
@@ -39,6 +40,31 @@ const BASE_GROUPS = [
 	{ name: 'admin', weight: 100, prefix: '&c[Admin] ', parents: ['mod'] },
 	{ name: 'owner', weight: 1000, prefix: '&6[Owner] ', parents: ['admin'] }
 ];
+
+/** Món pla fet només d'aire: res de terreny, ni estructures, ni la plataforma de pedra per defecte. */
+const VOID_WORLD = JSON.stringify({
+	layers: [{ block: 'minecraft:air', height: 1 }],
+	biome: 'minecraft:the_void',
+	features: false,
+	lakes: false
+});
+/** Alçada del terra de la plataforma dels mons buits. */
+const PLATFORM_Y = 63;
+
+/** Variables del món segons el tipus triat en crear el servidor. */
+function worldEnv(server: McServer): Record<string, string> {
+	if (server.worldType === 'flat') return { LEVEL_TYPE: 'FLAT' };
+	if (server.worldType !== 'void') return {};
+	return {
+		LEVEL_TYPE: 'FLAT',
+		GENERATOR_SETTINGS: VOID_WORLD,
+		GENERATE_STRUCTURES: 'false',
+		// Pensat com a sala d'espera: sense monstres i sense poder trencar la plataforma.
+		DIFFICULTY: 'peaceful',
+		MODE: 'adventure',
+		SPAWN_PROTECTION: '0'
+	};
+}
 
 /** Cadena YAML entre cometes dobles. Compose interpola `$`, així que s'escapa com `$$`. */
 const yamlString = (value: string) => JSON.stringify(value.replace(/\$/g, '$$$$'));
@@ -88,6 +114,7 @@ export function composeFile(server: McServer): string {
 				ONLINE_MODE: server.proxyId === null ? 'TRUE' : 'FALSE',
 				ENABLE_RCON: 'true',
 				RCON_PASSWORD: server.rconPassword ?? '',
+				...worldEnv(server),
 				...luckPermsEnv(server)
 			}
 		: {
@@ -329,6 +356,49 @@ async function seedBaseGroups(server: McServer): Promise<string | null> {
 	}
 }
 
+/**
+ * El que només es fa el primer cop: la plataforma d'un món buit i la pregeneració amb
+ * Chunky. Retorna un avís si alguna cosa no ha anat bé (el servidor queda engegat igualment).
+ */
+async function prepareWorld(server: McServer): Promise<string | null> {
+	const rcon = (command: string) => rconCommand(server, command);
+	try {
+		if (server.worldType === 'void') {
+			const size = server.platformSize ?? 10;
+			const lo = -Math.floor(size / 2);
+			const hi = lo + size - 1;
+			await rcon(`forceload add ${lo} ${lo} ${hi} ${hi}`);
+			// El tros de món triga un moment a carregar-se; fins llavors `fill` s'hi nega.
+			let placed = false;
+			for (let attempt = 0; attempt < 10 && !placed; attempt++) {
+				await sleep(1000);
+				placed = /filled|block/i.test(await rcon(`fill ${lo} ${PLATFORM_Y} ${lo} ${hi} ${PLATFORM_Y} ${hi} minecraft:smooth_stone`));
+			}
+			await rcon(`setworldspawn 0 ${PLATFORM_Y + 1} 0`);
+			// Que tothom aparegui al centre i no al voltant (on no hi ha terra). El nom de la
+			// regla depèn de la versió; la que no existeixi es descarta sola.
+			await rcon('gamerule spawn_radius 0');
+			await rcon('gamerule spawnRadius 0');
+			await rcon(`forceload remove ${lo} ${lo} ${hi} ${hi}`);
+			if (!placed) return 'No s’ha pogut col·locar la plataforma; posa-la a mà amb /fill des de la consola.';
+		}
+		if (server.pregenRadius) {
+			const reply = await rcon('chunky world world');
+			if (/unknown|incorrect/i.test(reply)) return 'El plugin Chunky no hi és: el món no s’ha pregenerat. Instal·la’l a «Plugins».';
+			await rcon('chunky center 0 0');
+			await rcon(`chunky radius ${server.pregenRadius}`);
+			await rcon('chunky start');
+		}
+		return null;
+	} catch (e) {
+		return `No s’ha pogut preparar el món (${(e as Error).message}).`;
+	}
+}
+
+/** Cal fer la preparació del món en aquesta creació? */
+const needsWorldSetup = (server: McServer) =>
+	server.type === 'paper' && !server.setupDone && (server.worldType === 'void' || server.pregenRadius !== null);
+
 /** Reescriu la llista de servidors d'un proxy i el reinicia perquè la llegeixi. */
 async function refreshProxy(proxyId: number | null): Promise<void> {
 	const proxy = proxyId === null ? null : getServer(proxyId);
@@ -356,6 +426,12 @@ async function run(id: number, previousProxyId: number | null): Promise<void> {
 		enter(id, 'groups');
 		warning = await seedBaseGroups(server);
 	}
+	if (needsWorldSetup(server)) {
+		enter(id, 'world');
+		const worldWarning = await prepareWorld(server);
+		markSetupDone(id);
+		warning = [warning, worldWarning].filter(Boolean).join(' ') || null;
+	}
 	if (server.proxyId !== null || previousProxyId !== null) enter(id, 'proxy');
 	await refreshProxy(server.proxyId);
 	if (previousProxyId !== server.proxyId) await refreshProxy(previousProxyId);
@@ -377,6 +453,7 @@ function enter(id: number, step: ProvisionStep): void {
 export function provisionSteps(server: McServer): ProvisionStep[] {
 	return PROVISION_STEPS.filter((step) => {
 		if (step === 'groups') return server.type === 'paper';
+		if (step === 'world') return needsWorldSetup(server);
 		if (step === 'proxy') return server.proxyId !== null;
 		return true;
 	});

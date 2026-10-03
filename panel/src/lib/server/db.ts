@@ -55,6 +55,17 @@ db.exec(`
 	);
 `);
 
+// Columnes afegides després de la primera versió de la taula.
+const serverColumns = new Set((db.prepare('PRAGMA table_info(servers)').all() as { name: string }[]).map((c) => c.name));
+for (const [name, ddl] of [
+	['world_type', "TEXT NOT NULL DEFAULT 'normal'"],
+	['platform_size', 'INTEGER'],
+	['pregen_radius', 'INTEGER'],
+	['setup_done', 'INTEGER NOT NULL DEFAULT 0']
+]) {
+	if (!serverColumns.has(name)) db.exec(`ALTER TABLE servers ADD COLUMN ${name} ${ddl}`);
+}
+
 // Una creació que estava a mitges quan el panell es va aturar no continuarà sola.
 db.prepare("UPDATE servers SET status = 'error', status_detail = ? WHERE status = 'creating'").run(
 	'El panell es va reiniciar mentre es creava. Torna-ho a provar.'

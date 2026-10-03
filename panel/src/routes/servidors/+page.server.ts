@@ -23,7 +23,7 @@ import {
 	type McServer,
 	type NewServer
 } from '$lib/server/servers';
-import { DEFAULTS, SERVER_COOKIE } from '$lib/servers';
+import { DEFAULTS, LOBBY_MEMORY, PLATFORM, PREGEN, SERVER_COOKIE, type WorldType } from '$lib/servers';
 import type { Actions, PageServerLoad } from './$types';
 
 const YEAR = 60 * 60 * 24 * 365;
@@ -55,7 +55,7 @@ export const load: PageServerLoad = async () => {
 			proxyName: servers.find((p) => p.id === s.proxyId)?.name ?? null,
 			status: s.status,
 			statusDetail: s.statusDetail,
-			managed: s.managed
+			managed: s.managed, worldType: s.worldType, platformSize: s.platformSize
 		}))
 	};
 };
@@ -140,9 +140,64 @@ export const actions: Actions = {
 		const settings = parseSettings(form, type, null);
 		if (typeof settings === 'string') return fail(400, { error: settings });
 
-		const server = insertServer({ slug, name, type, ...settings });
+		// El món: només per als servidors normals, i només es pot triar ara.
+		const rawWorld = field(form, 'worldType');
+		const worldType: WorldType = type === 'paper' && (rawWorld === 'flat' || rawWorld === 'void') ? rawWorld : 'normal';
+		const wantsLobby = type === 'velocity' && field(form, 'lobby') === 'on';
+
+		let platformSize: number | null = null;
+		if (worldType === 'void' || wantsLobby) {
+			platformSize = Number(field(form, 'platformSize') || PLATFORM.default);
+			if (!Number.isInteger(platformSize) || platformSize < PLATFORM.min || platformSize > PLATFORM.max) {
+				return fail(400, { error: `La plataforma ha de fer entre ${PLATFORM.min} i ${PLATFORM.max} blocs de costat` });
+			}
+		}
+
+		let pregenRadius: number | null = null;
+		const rawPregen = Number(field(form, 'pregenRadius') || 0);
+		if (type === 'paper' && worldType !== 'void' && rawPregen !== 0) {
+			if (!Number.isInteger(rawPregen) || rawPregen < PREGEN.min || rawPregen > PREGEN.max) {
+				return fail(400, { error: `El radi a pregenerar ha de ser entre ${PREGEN.min} i ${PREGEN.max} blocs` });
+			}
+			pregenRadius = rawPregen;
+		}
+
+		const lobbySlug = `${slug}-lobby`;
+		if (wantsLobby) {
+			if (!SLUG_PATTERN.test(lobbySlug)) return fail(400, { error: 'Amb lobby, l’identificador del proxy pot tenir com a molt 18 caràcters' });
+			if (listServers().some((s) => s.slug === lobbySlug)) return fail(400, { error: `Ja hi ha un servidor amb l’identificador «${lobbySlug}»` });
+		}
+
+		const server = insertServer({
+			slug,
+			name,
+			type,
+			...settings,
+			worldType,
+			platformSize: worldType === 'void' ? platformSize : null,
+			pregenRadius
+		});
 		startProvision(server.id);
-		audit(user, 'Crear servidor', `servidor:${slug}`, { type, ...settings });
+		audit(user, 'Crear servidor', `servidor:${slug}`, { type, ...settings, worldType, platformSize, pregenRadius });
+
+		if (wantsLobby) {
+			// La sala d'espera: un servidor normal darrere del proxy, amb un món buit i una plataforma.
+			const lobby = insertServer({
+				slug: lobbySlug,
+				name: `Lobby de ${name}`.slice(0, 40),
+				type: 'paper',
+				version: DEFAULTS.paper.version,
+				memory: LOBBY_MEMORY,
+				hostPort: null,
+				proxyId: server.id,
+				worldType: 'void',
+				platformSize,
+				pregenRadius: null
+			});
+			startProvision(lobby.id);
+			audit(user, 'Crear servidor', `servidor:${lobbySlug}`, { type: 'paper', proxy: slug, worldType: 'void', platformSize });
+			return { success: `S’estan creant «${name}» i el seu lobby. La primera vegada pot trigar uns minuts.` };
+		}
 		return { success: `S’està creant «${name}». La primera vegada pot trigar uns minuts.` };
 	},
 

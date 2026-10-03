@@ -2,6 +2,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { db } from './db';
+import type { WorldType } from '$lib/servers';
 
 // Els servidors que gestiona el panell. Cada un és un contenidor Docker amb el seu
 // directori a MC_ROOT/servers/<slug>/ (docker-compose.yml + data/).
@@ -37,6 +38,13 @@ export interface McServer {
 	bridgeUrl: string | null;
 	bridgeToken: string | null;
 	forwardingSecret: string | null;
+	worldType: WorldType;
+	/** Costat de la plataforma (en blocs) d'un món buit. */
+	platformSize: number | null;
+	/** Radi que Chunky ha de generar per endavant el primer cop. null = res. */
+	pregenRadius: number | null;
+	/** Ja s'ha fet la preparació del món (plataforma, pregeneració)? Només es fa un cop. */
+	setupDone: boolean;
 }
 
 interface Row {
@@ -53,6 +61,10 @@ interface Row {
 	forwarding_secret: string | null;
 	status: ServerStatus;
 	status_detail: string | null;
+	world_type: WorldType;
+	platform_size: number | null;
+	pregen_radius: number | null;
+	setup_done: number;
 }
 
 /** Ports només per a 127.0.0.1, derivats de l'id (que no es reutilitza mai). */
@@ -100,7 +112,11 @@ function fromRow(r: Row): McServer {
 		rconPassword: paper ? r.rcon_password : null,
 		bridgeUrl: paper ? `http://127.0.0.1:${BRIDGE_PORT_BASE + r.id}` : null,
 		bridgeToken: paper ? r.bridge_token : null,
-		forwardingSecret: r.forwarding_secret
+		forwardingSecret: r.forwarding_secret,
+		worldType: r.world_type,
+		platformSize: r.platform_size,
+		pregenRadius: r.pregen_radius,
+		setupDone: r.setup_done === 1
 	};
 }
 
@@ -127,7 +143,11 @@ function legacyServer(): McServer | null {
 		rconPassword: env.MC_RCON_PASSWORD || null,
 		bridgeUrl: env.BRIDGE_URL || 'http://127.0.0.1:8765',
 		bridgeToken: env.BRIDGE_TOKEN || null,
-		forwardingSecret: null
+		forwardingSecret: null,
+		worldType: 'normal',
+		platformSize: null,
+		pregenRadius: null,
+		setupDone: true
 	};
 }
 
@@ -164,6 +184,9 @@ export interface NewServer {
 	memory: string;
 	hostPort: number | null;
 	proxyId: number | null;
+	worldType: WorldType;
+	platformSize: number | null;
+	pregenRadius: number | null;
 }
 
 const secret = (bytes: number) => randomBytes(bytes).toString('hex');
@@ -173,8 +196,9 @@ export function insertServer(s: NewServer): McServer {
 	const { lastInsertRowid } = db
 		.prepare(
 			`INSERT INTO servers (slug, name, type, version, memory, host_port, proxy_id,
-				rcon_password, bridge_token, forwarding_secret, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'creating', ?)`
+				rcon_password, bridge_token, forwarding_secret, world_type, platform_size, pregen_radius,
+				status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'creating', ?)`
 		)
 		.run(
 			s.slug,
@@ -187,6 +211,9 @@ export function insertServer(s: NewServer): McServer {
 			paper ? secret(24) : null,
 			paper ? secret(32) : null,
 			paper ? null : secret(24),
+			s.worldType,
+			s.platformSize,
+			s.pregenRadius,
 			Date.now()
 		);
 	return getServer(Number(lastInsertRowid))!;
@@ -204,6 +231,10 @@ export function updateServerSettings(id: number, s: Pick<NewServer, 'version' | 
 
 export function setServerStatus(id: number, status: ServerStatus, detail: string | null = null): void {
 	db.prepare('UPDATE servers SET status = ?, status_detail = ? WHERE id = ?').run(status, detail, id);
+}
+
+export function markSetupDone(id: number): void {
+	db.prepare('UPDATE servers SET setup_done = 1 WHERE id = ?').run(id);
 }
 
 export function deleteServerRow(id: number): void {

@@ -3,7 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import Flash from '$lib/components/Flash.svelte';
 	import { hasRole } from '$lib/roles';
-	import { DEFAULTS, STATUS_LABELS, STEP_LABELS } from '$lib/servers';
+	import { DEFAULTS, LOBBY_MEMORY, PLATFORM, PREGEN, STATUS_LABELS, STEP_LABELS, WORLD_LABELS, type WorldType } from '$lib/servers';
 
 	let { data, form } = $props();
 
@@ -53,6 +53,17 @@
 	let port = $state<number | null>(null);
 	let memory = $state<string>(DEFAULTS.paper.memory);
 	let version = $state('');
+	let worldType = $state<WorldType>('normal');
+	let platformSize = $state<number>(PLATFORM.default);
+	let pregen = $state(0);
+	let lobby = $state(true);
+
+	const WORLDS: { type: WorldType; text: string }[] = [
+		{ type: 'normal', text: 'Terreny, biomes i estructures de sempre. Per jugar-hi.' },
+		{ type: 'flat', text: 'Tot pla, de gespa. Per construir o fer proves.' },
+		{ type: 'void', text: 'Res més que una plataforma al mig del no-res. Per a una sala d’espera o minijocs.' }
+	];
+	const isVoid = $derived(type === 'paper' && worldType === 'void');
 
 	function slugify(text: string): string {
 		return text
@@ -75,6 +86,10 @@
 		name = slug = version = proxy = '';
 		slugEdited = false;
 		port = null;
+		worldType = 'normal';
+		platformSize = PLATFORM.default;
+		pregen = 0;
+		lobby = true;
 		setType('paper');
 	}
 
@@ -144,6 +159,8 @@
 				<div class="tags">
 					<span class="tag">{s.type === 'paper' ? 'Paper' : 'Velocity'} {s.version || ''}</span>
 					{#if s.memory}<span class="tag">{s.memory}</span>{/if}
+					{#if s.worldType === 'void'}<span class="tag">plataforma {s.platformSize}×{s.platformSize}</span>{/if}
+					{#if s.worldType === 'flat'}<span class="tag">món pla</span>{/if}
 					{#if s.hostPort !== null}<span class="tag strong">port {s.hostPort}</span>{/if}
 					{#if s.managed}<span class="tag faint">mc-{s.slug}</span>{/if}
 				</div>
@@ -316,6 +333,10 @@
 		<input type="hidden" name="memory" value={memory} />
 		<input type="hidden" name="proxyId" value={behindProxy ? proxy : ''} />
 		<input type="hidden" name="hostPort" value={effectivePort ?? ''} />
+		<input type="hidden" name="worldType" value={type === 'paper' ? worldType : 'normal'} />
+		<input type="hidden" name="platformSize" value={platformSize} />
+		<input type="hidden" name="pregenRadius" value={type === 'paper' && !isVoid ? pregen : 0} />
+		<input type="hidden" name="lobby" value={type === 'velocity' && lobby ? 'on' : ''} />
 
 		<div class="steps">
 			<div class="field">
@@ -415,6 +436,105 @@
 					/>
 				</div>
 			</div>
+
+			{#if type === 'paper'}
+				<div class="field">
+					<span class="field-label"><span class="num">5</span> Com és el món?</span>
+					<div class="options">
+						{#each WORLDS as w (w.type)}
+							<div class="option with-port" class:picked={worldType === w.type}>
+								<button type="button" class="option-hit" aria-pressed={worldType === w.type} onclick={() => (worldType = w.type)}>
+									<span class="option-text">
+										<strong>{WORLD_LABELS[w.type]}</strong>
+										<span class="muted">{w.text}</span>
+									</span>
+								</button>
+								{#if w.type === 'void'}
+									<label class="size">
+										<input
+											type="number"
+											min={PLATFORM.min}
+											max={PLATFORM.max}
+											class="mono"
+											bind:value={platformSize}
+											onfocus={() => (worldType = 'void')}
+											aria-label="Costat de la plataforma, en blocs"
+										/>
+										<span class="muted">× {platformSize || '?'} blocs</span>
+									</label>
+								{/if}
+							</div>
+						{/each}
+					</div>
+					<p class="muted note">El tipus de món no es pot canviar un cop creat el servidor.</p>
+				</div>
+
+				{#if !isVoid}
+					<div class="field">
+						<span class="field-label"><span class="num">6</span> Generar el món per endavant (Chunky)</span>
+						<div class="chips">
+							<button type="button" class="chip" class:picked={pregen === 0} onclick={() => (pregen = 0)}>No</button>
+							{#each PREGEN.presets as r (r)}
+								<button type="button" class="chip" class:picked={pregen === r} onclick={() => (pregen = r)}>{r} blocs</button>
+							{/each}
+							<input
+								type="number"
+								class="chip-input wide"
+								min={PREGEN.min}
+								max={PREGEN.max}
+								value={pregen === 0 || PREGEN.presets.some((r) => r === pregen) ? '' : pregen}
+								oninput={(e) => (pregen = Number(e.currentTarget.value) || 0)}
+								placeholder="Un altre radi (en blocs)"
+								aria-label="Un altre radi, en blocs"
+							/>
+						</div>
+						<p class="muted note">
+							{#if pregen === 0}
+								El món es va generant a mesura que els jugadors exploren.
+							{:else}
+								Es genera un quadrat de {pregen * 2} × {pregen * 2} blocs al voltant de l’inici, en segon pla, just després de crear
+								el servidor. Explorar-hi després no farà anar lent el servidor, però mentre dura fa servir molta CPU i, com més
+								gran, més disc ocupa.
+							{/if}
+						</p>
+					</div>
+				{/if}
+			{:else}
+				<div class="field">
+					<span class="field-label"><span class="num">5</span> Sala d’espera (lobby)</span>
+					<div class="options">
+						<div class="option with-port" class:picked={lobby}>
+							<button type="button" class="option-hit" aria-pressed={lobby} onclick={() => (lobby = true)}>
+								<span class="option-text">
+									<strong>Crear també un lobby</strong>
+									<span class="muted">
+										Un proxy no té món propi: els jugadors han d’aparèixer en algun servidor. Es crea un servidor petit amb un món
+										buit i només una plataforma.
+									</span>
+								</span>
+							</button>
+							<label class="size">
+								<input
+									type="number"
+									min={PLATFORM.min}
+									max={PLATFORM.max}
+									class="mono"
+									bind:value={platformSize}
+									onfocus={() => (lobby = true)}
+									aria-label="Costat de la plataforma, en blocs"
+								/>
+								<span class="muted">× {platformSize || '?'} blocs</span>
+							</label>
+						</div>
+						<button type="button" class="option" class:picked={!lobby} aria-pressed={!lobby} onclick={() => (lobby = false)}>
+							<span class="option-text">
+								<strong>Només el proxy</strong>
+								<span class="muted">Ja hi afegiràs servidors després, triant aquest proxy en crear-los.</span>
+							</span>
+						</button>
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<aside class="summary">
@@ -437,7 +557,18 @@
 					<span>{behindProxy ? `pel proxy «${proxyName}»` : `pel port ${effectivePort}`}</span>
 				</li>
 				{#if type === 'paper'}
+					<li>
+						<span class="muted">Món</span>
+						<span>{isVoid ? `plataforma de ${platformSize} × ${platformSize}` : WORLD_LABELS[worldType].toLowerCase()}</span>
+					</li>
+					{#if !isVoid && pregen > 0}
+						<li><span class="muted">Pregenerat</span><span>radi de {pregen} blocs</span></li>
+					{/if}
 					<li><span class="muted">Plugins</span><span>els del catàleg</span></li>
+				{:else if lobby}
+					<li><span class="muted">Lobby</span><code>mc-{effectiveSlug || '…'}-lobby</code></li>
+					<li><span class="muted">Món del lobby</span><span>plataforma de {platformSize} × {platformSize}</span></li>
+					<li><span class="muted">Memòria del lobby</span><span>{LOBBY_MEMORY}</span></li>
 				{/if}
 			</ul>
 			<div class="row">
@@ -881,6 +1012,18 @@
 	.port {
 		width: 6.5rem;
 		flex: none;
+	}
+	.size {
+		flex: none;
+		flex-direction: row;
+		align-items: center;
+		gap: 0.4rem;
+		margin: 0;
+		font-size: 0.85rem;
+		white-space: nowrap;
+	}
+	.size input {
+		width: 4.5rem;
 	}
 	.grow {
 		flex: 1;
