@@ -42,6 +42,45 @@ export const PLATFORM = { min: 1, max: 64, default: 10 } as const;
 export const PREGEN = { min: 100, max: 20000, presets: [1000, 2000, 3000, 5000] } as const;
 export const LOBBY_MEMORY = '1G';
 
+/** Opcions del joc d'un servidor normal (les de server.properties que val la pena tocar). */
+export interface GameSettings {
+	motd?: string;
+	maxPlayers?: number;
+	difficulty?: Difficulty;
+	gamemode?: Gamemode;
+	pvp?: boolean;
+	hardcore?: boolean;
+	whitelist?: boolean;
+	allowFlight?: boolean;
+	allowNether?: boolean;
+	viewDistance?: number;
+	simulationDistance?: number;
+	spawnProtection?: number;
+}
+
+export const DIFFICULTIES = ['peaceful', 'easy', 'normal', 'hard'] as const;
+export type Difficulty = (typeof DIFFICULTIES)[number];
+export const DIFFICULTY_LABELS: Record<Difficulty, string> = { peaceful: 'Pacífic', easy: 'Fàcil', normal: 'Normal', hard: 'Difícil' };
+
+export const GAMEMODES = ['survival', 'creative', 'adventure', 'spectator'] as const;
+export type Gamemode = (typeof GAMEMODES)[number];
+export const GAMEMODE_LABELS: Record<Gamemode, string> = {
+	survival: 'Supervivència',
+	creative: 'Creatiu',
+	adventure: 'Aventura',
+	spectator: 'Espectador'
+};
+
+/** «3G» o «512M» → MB. */
+export function memoryMB(memory: string): number {
+	const match = /^(\d+)([MG])$/i.exec(memory);
+	if (!match) return 0;
+	return Number(match[1]) * (match[2].toUpperCase() === 'G' ? 1024 : 1);
+}
+
+/** Memòria que es deixa lliure per al sistema, el panell i la base de dades. */
+export const RESERVED_MB = 1024;
+
 export const DEFAULTS = {
 	paper: { version: 'LATEST', memory: '3G' },
 	velocity: { version: 'LATEST', memory: '512M', hostPort: 25565 }

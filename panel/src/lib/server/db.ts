@@ -61,7 +61,8 @@ for (const [name, ddl] of [
 	['world_type', "TEXT NOT NULL DEFAULT 'normal'"],
 	['platform_size', 'INTEGER'],
 	['pregen_radius', 'INTEGER'],
-	['setup_done', 'INTEGER NOT NULL DEFAULT 0']
+	['setup_done', 'INTEGER NOT NULL DEFAULT 0'],
+	['settings', 'TEXT']
 ]) {
 	if (!serverColumns.has(name)) db.exec(`ALTER TABLE servers ADD COLUMN ${name} ${ddl}`);
 }

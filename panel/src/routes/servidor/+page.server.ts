@@ -1,7 +1,11 @@
 import { error, fail } from '@sveltejs/kit';
 import { bridge, BridgeError } from '$lib/server/bridge';
 import { DockerError, dockerRestart, dockerStart, dockerStatsCached, dockerStatus, dockerStop } from '$lib/server/docker';
-import type { McServer } from '$lib/server/servers';
+import { updateGameSettings, type McServer } from '$lib/server/servers';
+import { provisioning, startProvision } from '$lib/server/provision';
+import { effectiveSettings } from '$lib/server/properties';
+import { DIFFICULTIES, GAMEMODES, type GameSettings } from '$lib/servers';
+import { hasRole } from '$lib/roles';
 import { RconError, rconCommand, rconConfigured } from '$lib/server/rcon';
 import { mcMaxPlayers } from '$lib/server/mcfiles';
 import { BackupError, createBackup } from '$lib/server/backup';
@@ -62,9 +66,29 @@ async function loadServer(mc: McServer | null): Promise<{ server: ServerView | n
 	}
 }
 
+/** Es poden canviar les opcions del joc d'aquest servidor des del panell? */
+const configurable = (mc: McServer | null): mc is McServer => !!mc && mc.managed && mc.type === 'paper';
+
+/** Jugadors de la llista blanca, o null si ara no es pot saber (servidor aturat). */
+async function loadWhitelist(mc: McServer): Promise<string[] | null> {
+	try {
+		const reply = await rconCommand(mc, 'whitelist list');
+		const names = /:\s*(.+)$/.exec(reply.trim())?.[1];
+		return names ? names.split(/,\s*/).filter(Boolean).sort((a, b) => a.localeCompare(b)) : [];
+	} catch {
+		return null;
+	}
+}
+
+const PLAYER_NAME = /^[A-Za-z0-9_.]{1,32}$/;
+
 export const load: PageServerLoad = async ({ locals }) => {
 	const mc = locals.server;
 	const { server, error } = await loadServer(mc);
+	const canConfigure = configurable(mc) && hasRole(locals.user, 'admin');
+	const [settings, whitelist] = canConfigure
+		? await Promise.all([effectiveSettings(mc), server?.running ? loadWhitelist(mc) : Promise.resolve(null)])
+		: [null, null];
 	const target = mc ? auditTarget(mc) : null;
 	const recent = listAudit(200)
 		.filter((e) => e.target === target)
@@ -75,7 +99,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		rconEnabled: !!mc && rconConfigured(mc),
 		server,
 		error,
-		recent
+		recent,
+		settings,
+		whitelist
 	};
 };
 
@@ -113,6 +139,71 @@ export const actions: Actions = {
 		}
 		audit(user, 'Còpia de seguretat', auditTarget(mc), { file: name });
 		return { success: `Còpia creada: ${name}` };
+	},
+
+	settings: async ({ request, locals }) => {
+		const user = requireRole(locals, 'admin');
+		const mc = current(locals);
+		if (!configurable(mc)) return fail(400, { error: 'Aquest servidor no es pot configurar des del panell' });
+		if (provisioning(mc.id)) return fail(409, { error: 'Encara s’està aplicant un canvi; espera que acabi' });
+		const form = await request.formData();
+
+		const motd = field(form, 'motd');
+		if (!motd || motd.length > 120 || /[\r\n]/.test(motd)) return fail(400, { error: 'El missatge (MOTD) ha de tenir entre 1 i 120 caràcters' });
+		const integer = (key: string, min: number, max: number): number | null => {
+			const value = Number(field(form, key));
+			return Number.isInteger(value) && value >= min && value <= max ? value : null;
+		};
+		const maxPlayers = integer('maxPlayers', 1, 1000);
+		const viewDistance = integer('viewDistance', 2, 32);
+		const simulationDistance = integer('simulationDistance', 2, 32);
+		const spawnProtection = integer('spawnProtection', 0, 256);
+		if (maxPlayers === null) return fail(400, { error: 'El màxim de jugadors ha de ser entre 1 i 1000' });
+		if (viewDistance === null || simulationDistance === null) return fail(400, { error: 'Les distàncies han de ser entre 2 i 32' });
+		if (spawnProtection === null) return fail(400, { error: 'La protecció de l’inici ha de ser entre 0 i 256 blocs' });
+
+		const difficulty = DIFFICULTIES.find((d) => d === field(form, 'difficulty'));
+		const gamemode = GAMEMODES.find((g) => g === field(form, 'gamemode'));
+		if (!difficulty || !gamemode) return fail(400, { error: 'Dificultat o mode de joc invàlids' });
+		const on = (key: string) => form.get(key) === 'on';
+
+		const settings: GameSettings = {
+			motd,
+			maxPlayers,
+			difficulty,
+			gamemode,
+			pvp: on('pvp'),
+			hardcore: on('hardcore'),
+			whitelist: on('whitelist'),
+			allowFlight: on('allowFlight'),
+			allowNether: on('allowNether'),
+			viewDistance,
+			simulationDistance,
+			spawnProtection
+		};
+		updateGameSettings(mc.id, settings);
+		// Les opcions es llegeixen en arrencar: cal tornar a crear el contenidor amb les noves.
+		startProvision(mc.id, mc.proxyId, { pull: false });
+		audit(user, 'Canviar opcions del joc', auditTarget(mc), settings);
+		return { success: 'Opcions desades. El servidor es reinicia per aplicar-les.' };
+	},
+
+	whitelist: async ({ request, locals }) => {
+		const user = requireRole(locals, 'admin');
+		const mc = current(locals);
+		const form = await request.formData();
+		const player = field(form, 'player');
+		const remove = field(form, 'op') === 'remove';
+		if (!PLAYER_NAME.test(player)) return fail(400, { error: 'Nom de jugador invàlid' });
+		let reply: string;
+		try {
+			reply = await rconCommand(mc, `whitelist ${remove ? 'remove' : 'add'} ${player}`);
+		} catch (e) {
+			if (e instanceof RconError) return fail(502, { error: `${e.message}. El servidor ha d’estar engegat.` });
+			throw e;
+		}
+		audit(user, remove ? 'Treure de la llista blanca' : 'Afegir a la llista blanca', auditTarget(mc), { player });
+		return { success: reply || (remove ? `${player} tret de la llista blanca` : `${player} afegit a la llista blanca`) };
 	},
 
 	command: async ({ request, locals }) => {

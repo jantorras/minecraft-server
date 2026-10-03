@@ -2,7 +2,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 import { db } from './db';
-import type { WorldType } from '$lib/servers';
+import type { GameSettings, WorldType } from '$lib/servers';
 
 // Els servidors que gestiona el panell. Cada un és un contenidor Docker amb el seu
 // directori a MC_ROOT/servers/<slug>/ (docker-compose.yml + data/).
@@ -45,6 +45,8 @@ export interface McServer {
 	pregenRadius: number | null;
 	/** Ja s'ha fet la preparació del món (plataforma, pregeneració)? Només es fa un cop. */
 	setupDone: boolean;
+	/** Opcions del joc; només tenen efecte als servidors normals. */
+	settings: GameSettings;
 }
 
 interface Row {
@@ -65,6 +67,23 @@ interface Row {
 	platform_size: number | null;
 	pregen_radius: number | null;
 	setup_done: number;
+	settings: string | null;
+}
+
+/** Opcions de partida d'un servidor nou. Un món buit és una sala d'espera: sense monstres ni trencar res. */
+export function defaultSettings(name: string, worldType: WorldType): GameSettings {
+	return worldType === 'void'
+		? { motd: name, difficulty: 'peaceful', gamemode: 'adventure', spawnProtection: 0 }
+		: { motd: name };
+}
+
+function parseSettings(r: Row): GameSettings {
+	try {
+		if (r.settings) return JSON.parse(r.settings) as GameSettings;
+	} catch {
+		// Un valor corrupte no ha de deixar el servidor inservible: es torna als de partida.
+	}
+	return defaultSettings(r.name, r.world_type);
 }
 
 /** Ports només per a 127.0.0.1, derivats de l'id (que no es reutilitza mai). */
@@ -116,7 +135,8 @@ function fromRow(r: Row): McServer {
 		worldType: r.world_type,
 		platformSize: r.platform_size,
 		pregenRadius: r.pregen_radius,
-		setupDone: r.setup_done === 1
+		setupDone: r.setup_done === 1,
+		settings: parseSettings(r)
 	};
 }
 
@@ -147,7 +167,8 @@ function legacyServer(): McServer | null {
 		worldType: 'normal',
 		platformSize: null,
 		pregenRadius: null,
-		setupDone: true
+		setupDone: true,
+		settings: {}
 	};
 }
 
@@ -197,8 +218,8 @@ export function insertServer(s: NewServer): McServer {
 		.prepare(
 			`INSERT INTO servers (slug, name, type, version, memory, host_port, proxy_id,
 				rcon_password, bridge_token, forwarding_secret, world_type, platform_size, pregen_radius,
-				status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'creating', ?)`
+				settings, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'creating', ?)`
 		)
 		.run(
 			s.slug,
@@ -214,6 +235,7 @@ export function insertServer(s: NewServer): McServer {
 			s.worldType,
 			s.platformSize,
 			s.pregenRadius,
+			JSON.stringify(defaultSettings(s.name, s.worldType)),
 			Date.now()
 		);
 	return getServer(Number(lastInsertRowid))!;
@@ -231,6 +253,10 @@ export function updateServerSettings(id: number, s: Pick<NewServer, 'version' | 
 
 export function setServerStatus(id: number, status: ServerStatus, detail: string | null = null): void {
 	db.prepare('UPDATE servers SET status = ?, status_detail = ? WHERE id = ?').run(status, detail, id);
+}
+
+export function updateGameSettings(id: number, settings: GameSettings): void {
+	db.prepare('UPDATE servers SET settings = ? WHERE id = ?').run(JSON.stringify(settings), id);
 }
 
 export function markSetupDone(id: number): void {

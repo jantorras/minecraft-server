@@ -8,7 +8,7 @@ import { env } from '$env/dynamic/private';
 import { bridgeFor } from './bridge';
 import { dockerRestart, dockerStatus } from './docker';
 import { rconCommand } from './rcon';
-import { PROVISION_STEPS, type ProvisionStep } from '$lib/servers';
+import { PROVISION_STEPS, memoryMB, type ProvisionStep } from '$lib/servers';
 import {
 	backendsOf,
 	containerName,
@@ -58,12 +58,39 @@ function worldEnv(server: McServer): Record<string, string> {
 	return {
 		LEVEL_TYPE: 'FLAT',
 		GENERATOR_SETTINGS: VOID_WORLD,
-		GENERATE_STRUCTURES: 'false',
-		// Pensat com a sala d'espera: sense monstres i sense poder trencar la plataforma.
-		DIFFICULTY: 'peaceful',
-		MODE: 'adventure',
-		SPAWN_PROTECTION: '0'
+		GENERATE_STRUCTURES: 'false'
 	};
+}
+
+/** Les opcions del joc, com a variables que la imatge escriu a server.properties a cada arrencada. */
+function settingsEnv(server: McServer): Record<string, string> {
+	const s = server.settings;
+	const env: Record<string, string> = { MOTD: s.motd || server.name };
+	const put = (key: string, value: string | number | boolean | undefined) => {
+		if (value !== undefined) env[key] = String(value);
+	};
+	put('MAX_PLAYERS', s.maxPlayers);
+	put('DIFFICULTY', s.difficulty);
+	put('MODE', s.gamemode);
+	put('PVP', s.pvp);
+	put('HARDCORE', s.hardcore);
+	put('ALLOW_FLIGHT', s.allowFlight);
+	put('ALLOW_NETHER', s.allowNether);
+	put('VIEW_DISTANCE', s.viewDistance);
+	put('SIMULATION_DISTANCE', s.simulationDistance);
+	put('SPAWN_PROTECTION', s.spawnProtection);
+	put('ENABLE_WHITELIST', s.whitelist);
+	put('ENFORCE_WHITELIST', s.whitelist);
+	return env;
+}
+
+/**
+ * Memòria inicial de la JVM. Amb les opcions d'Aikar la JVM ocupa d'entrada tota la que se
+ * li dona com a inicial; si fos tota la màxima, cada servidor nou es menjaria la seva RAM
+ * sencera només d'engegar-se i la VM es quedaria sense.
+ */
+function initialMemory(memory: string): string {
+	return memoryMB(memory) >= 2048 ? '1G' : memoryMB(memory) > 512 ? '512M' : memory;
 }
 
 /** Cadena YAML entre cometes dobles. Compose interpola `$`, així que s'escapa com `$$`. */
@@ -104,12 +131,13 @@ export function composeFile(server: McServer): string {
 				EULA: 'TRUE',
 				TYPE: 'PAPER',
 				VERSION: latest ? 'LATEST' : server.version,
-				MEMORY: server.memory,
+				INIT_MEMORY: initialMemory(server.memory),
+				MAX_MEMORY: server.memory,
 				// Opcions de la JVM afinades per a servidors de Minecraft (menys aturades per GC).
 				USE_AIKAR_FLAGS: 'true',
 				UID: uid,
 				GID: gid,
-				MOTD: server.name,
+				...settingsEnv(server),
 				// Darrere d'un proxy és el proxy qui valida els comptes amb Mojang.
 				ONLINE_MODE: server.proxyId === null ? 'TRUE' : 'FALSE',
 				ENABLE_RCON: 'true',
@@ -281,9 +309,14 @@ async function writeFiles(server: McServer): Promise<void> {
 	await fs.writeFile(path.join(server.dir!, 'docker-compose.yml'), composeFile(server), { mode: 0o600 });
 }
 
-async function writeVelocityToml(proxy: McServer): Promise<void> {
+/** Escriu velocity.toml i diu si ha canviat (si no, no cal reiniciar el proxy). */
+async function writeVelocityToml(proxy: McServer): Promise<boolean> {
 	const file = path.join(proxy.dataDir!, 'velocity.toml');
-	await fs.writeFile(file, patchVelocityToml(await readOrNull(file), proxy, backendsOf(proxy.id)));
+	const current = await readOrNull(file);
+	const next = patchVelocityToml(current, proxy, backendsOf(proxy.id));
+	if (current !== null && next === current.replace(/\r\n/g, '\n')) return false;
+	await fs.writeFile(file, next);
+	return true;
 }
 
 async function compose(server: McServer, args: string[], timeoutMs: number): Promise<void> {
@@ -403,19 +436,22 @@ const needsWorldSetup = (server: McServer) =>
 async function refreshProxy(proxyId: number | null): Promise<void> {
 	const proxy = proxyId === null ? null : getServer(proxyId);
 	if (!proxy || !(await exists(proxy.dataDir!))) return;
-	await writeVelocityToml(proxy);
-	if ((await dockerStatus(proxy).catch(() => null))?.running) await dockerRestart(proxy);
+	// Reiniciar el proxy desconnecta tothom: només si la llista de servidors ha canviat.
+	const changed = await writeVelocityToml(proxy);
+	if (changed && (await dockerStatus(proxy).catch(() => null))?.running) await dockerRestart(proxy);
 }
 
-async function run(id: number, previousProxyId: number | null): Promise<void> {
+async function run(id: number, previousProxyId: number | null, pull: boolean): Promise<void> {
 	const server = getServer(id);
 	if (!server?.dir) throw new ProvisionError('Servidor desconegut');
 
 	enter(id, 'files');
 	await writeFiles(server);
-	enter(id, 'image');
-	// Si no es pot baixar (sense xarxa), encara pot funcionar amb la imatge que ja hi hagi.
-	await compose(server, ['pull'], 15 * 60_000).catch(() => {});
+	if (pull) {
+		enter(id, 'image');
+		// Si no es pot baixar (sense xarxa), encara pot funcionar amb la imatge que ja hi hagi.
+		await compose(server, ['pull'], 15 * 60_000).catch(() => {});
+	}
 	enter(id, 'container');
 	await compose(server, ['up', '-d', '--remove-orphans'], 5 * 60_000);
 	enter(id, 'boot');
@@ -474,12 +510,13 @@ export function provisioning(id: number): boolean {
  * Engega la creació (o reconfiguració) en segon pla: baixar la imatge i arrencar per
  * primer cop triga minuts, massa per a una petició. L'estat queda a la taula `servers`.
  */
-export function startProvision(id: number, previousProxyId: number | null = null): void {
+export function startProvision(id: number, previousProxyId: number | null = null, opts: { pull?: boolean } = {}): void {
 	if (running.has(id)) return;
 	running.add(id);
 	setServerStatus(id, 'creating');
 	enter(id, 'files');
-	run(id, previousProxyId)
+	// `pull: false` per a canvis de configuració: no cal tornar a mirar si hi ha una imatge nova.
+	run(id, previousProxyId, opts.pull ?? true)
 		.catch((e: Error) => setServerStatus(id, 'error', e.message))
 		.finally(() => {
 			running.delete(id);
@@ -494,16 +531,24 @@ export function startProvision(id: number, previousProxyId: number | null = null
 export async function removeServer(server: McServer): Promise<string | null> {
 	if (!server.managed || !server.dir) throw new ProvisionError('Aquest servidor no el gestiona el panell');
 	if (running.has(server.id)) throw new ProvisionError('Encara s’està creant; espera que acabi');
-
-	let movedTo: string | null = null;
-	if (await exists(server.dir)) {
-		if (await exists(path.join(server.dir, 'docker-compose.yml'))) await compose(server, ['down'], 120_000);
-		const trash = path.join(mcRoot()!, 'trash');
-		await fs.mkdir(trash, { recursive: true });
-		movedTo = path.join(trash, `${server.slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
-		await fs.rename(server.dir, movedTo);
+	// Un doble clic no ha de treure'l dues vegades alhora.
+	if (removing.has(server.id)) throw new ProvisionError('Ja s’està traient');
+	removing.add(server.id);
+	try {
+		let movedTo: string | null = null;
+		if (await exists(server.dir)) {
+			if (await exists(path.join(server.dir, 'docker-compose.yml'))) await compose(server, ['down'], 120_000);
+			const trash = path.join(mcRoot()!, 'trash');
+			await fs.mkdir(trash, { recursive: true });
+			movedTo = path.join(trash, `${server.slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+			await fs.rename(server.dir, movedTo);
+		}
+		deleteServerRow(server.id);
+		await refreshProxy(server.proxyId);
+		return movedTo;
+	} finally {
+		removing.delete(server.id);
 	}
-	deleteServerRow(server.id);
-	await refreshProxy(server.proxyId);
-	return movedTo;
 }
+
+const removing = new Set<number>();

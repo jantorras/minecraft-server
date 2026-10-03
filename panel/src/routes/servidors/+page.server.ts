@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { audit } from '$lib/server/audit';
@@ -23,10 +24,12 @@ import {
 	type McServer,
 	type NewServer
 } from '$lib/server/servers';
-import { DEFAULTS, LOBBY_MEMORY, PLATFORM, PREGEN, SERVER_COOKIE, type WorldType } from '$lib/servers';
+import { DEFAULTS, LOBBY_MEMORY, PLATFORM, PREGEN, RESERVED_MB, SERVER_COOKIE, memoryMB, type WorldType } from '$lib/servers';
 import type { Actions, PageServerLoad } from './$types';
 
 const YEAR = 60 * 60 * 24 * 365;
+
+const hostMemoryMB = () => Math.round(os.totalmem() / 1024 / 1024);
 
 /** Per on va la creació d'un servidor, amb les últimes línies de la seva consola si ja arrenca. */
 async function creationOf(server: McServer) {
@@ -41,6 +44,7 @@ export const load: PageServerLoad = async () => {
 	const servers = listServers();
 	const creations = await Promise.all(servers.map(creationOf));
 	return {
+		hostMemoryMB: hostMemoryMB(),
 		canProvision: provisionConfigured(),
 		list: servers.map((s, i) => ({
 			creation: creations[i],
@@ -160,6 +164,16 @@ export const actions: Actions = {
 				return fail(400, { error: `El radi a pregenerar ha de ser entre ${PREGEN.min} i ${PREGEN.max} blocs` });
 			}
 			pregenRadius = rawPregen;
+		}
+
+		// Donar als servidors més memòria de la que té la VM la fa anar a disc i ho encalla tot.
+		const wanted = memoryMB(settings.memory) + (wantsLobby ? memoryMB(LOBBY_MEMORY) : 0);
+		const assigned = listServers().reduce((sum, s) => sum + memoryMB(s.memory), 0);
+		const available = hostMemoryMB() - RESERVED_MB;
+		if (assigned + wanted > available && field(form, 'force') !== 'on') {
+			return fail(400, {
+				error: `No hi ha prou memòria: la VM té ${hostMemoryMB()} MB, els servidors ja en tenen ${assigned} MB assignats i aquest en demana ${wanted} MB. Tria’n menys, treu algun servidor o marca «crea’l igualment».`
+			});
 		}
 
 		const lobbySlug = `${slug}-lobby`;

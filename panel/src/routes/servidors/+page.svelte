@@ -3,7 +3,18 @@
 	import { invalidateAll } from '$app/navigation';
 	import Flash from '$lib/components/Flash.svelte';
 	import { hasRole } from '$lib/roles';
-	import { DEFAULTS, LOBBY_MEMORY, PLATFORM, PREGEN, STATUS_LABELS, STEP_LABELS, WORLD_LABELS, type WorldType } from '$lib/servers';
+	import {
+		DEFAULTS,
+		LOBBY_MEMORY,
+		PLATFORM,
+		PREGEN,
+		RESERVED_MB,
+		STATUS_LABELS,
+		STEP_LABELS,
+		WORLD_LABELS,
+		memoryMB,
+		type WorldType
+	} from '$lib/servers';
 
 	let { data, form } = $props();
 
@@ -65,6 +76,15 @@
 	];
 	const isVoid = $derived(type === 'paper' && worldType === 'void');
 
+	// Memòria: el que ja tenen assignat els servidors, el que demana el nou i el que té la VM.
+	let force = $state(false);
+	const assignedMB = $derived(data.list.reduce((sum, s) => sum + memoryMB(s.memory), 0));
+	const wantedMB = $derived(memoryMB(memory) + (type === 'velocity' && lobby ? memoryMB(LOBBY_MEMORY) : 0));
+	const availableMB = $derived(data.hostMemoryMB - RESERVED_MB);
+	const overBudget = $derived(assignedMB + wantedMB > availableMB);
+	const gb = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
+	const share = (mb: number) => `${Math.min(100, (mb / data.hostMemoryMB) * 100)}%`;
+
 	function slugify(text: string): string {
 		return text
 			.normalize('NFD')
@@ -90,6 +110,7 @@
 		platformSize = PLATFORM.default;
 		pregen = 0;
 		lobby = true;
+		force = false;
 		setType('paper');
 	}
 
@@ -337,6 +358,7 @@
 		<input type="hidden" name="platformSize" value={platformSize} />
 		<input type="hidden" name="pregenRadius" value={type === 'paper' && !isVoid ? pregen : 0} />
 		<input type="hidden" name="lobby" value={type === 'velocity' && lobby ? 'on' : ''} />
+		<input type="hidden" name="force" value={overBudget && force ? 'on' : ''} />
 
 		<div class="steps">
 			<div class="field">
@@ -571,8 +593,28 @@
 					<li><span class="muted">Memòria del lobby</span><span>{LOBBY_MEMORY}</span></li>
 				{/if}
 			</ul>
-			<div class="row">
-				<button disabled={!name || !effectiveSlug}>Crear</button>
+			<div class="budget" class:over={overBudget}>
+				<div class="budget-head">
+					<span>Memòria de la VM</span>
+					<span>{gb(assignedMB + wantedMB)} de {gb(data.hostMemoryMB)}</span>
+				</div>
+				<div class="budget-bar">
+					<span class="used" style="width: {share(assignedMB)}"></span>
+					<span class="new" style="width: {share(wantedMB)}"></span>
+				</div>
+				<p class="muted note">
+					Ja assignada: {gb(assignedMB)} · aquest: {gb(wantedMB)} · es reserva {gb(RESERVED_MB)} per al sistema i el panell.
+				</p>
+				{#if overBudget}
+					<p class="note problem">
+						No hi cap. Si es crea igualment, la VM es queda sense memòria i s’encalla tot: el panell i els altres servidors.
+						Tria menys memòria, treu algun servidor o dona més RAM a la VM.
+					</p>
+					<label class="inline"><input type="checkbox" bind:checked={force} /> Ho entenc, crea’l igualment</label>
+				{/if}
+			</div>
+			<div class="row" style="margin-top: 0.7rem">
+				<button disabled={!name || !effectiveSlug || (overBudget && !force)}>Crear</button>
 				<button type="button" class="secondary" onclick={resetNew}>Cancel·lar</button>
 			</div>
 			<p class="muted note">La primera arrencada baixa la imatge i pot trigar uns minuts.</p>
@@ -1064,6 +1106,33 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		padding: 0.9rem;
+	}
+	.budget-head {
+		display: flex;
+		justify-content: space-between;
+		font-size: 0.86rem;
+		font-weight: 600;
+	}
+	.budget-bar {
+		display: flex;
+		height: 0.6rem;
+		margin-top: 0.35rem;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius);
+		background: var(--bg-deep);
+		overflow: hidden;
+	}
+	.budget-bar .used {
+		background: var(--muted);
+	}
+	.budget-bar .new {
+		background: var(--ok);
+	}
+	.budget.over .budget-bar .new {
+		background: var(--danger);
+	}
+	.budget.over .budget-head span:last-child {
+		color: var(--danger);
 	}
 	.facts {
 		list-style: none;
