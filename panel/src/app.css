@@ -1,0 +1,303 @@
+/* Paleta i tipografia pròpies del servidor: els colors de rol són literalment
+   els mateixos codis (&7 &9 &c &6) que ja es veuen al joc, no una marca inventada. */
+:root {
+	--bg: #eef0f1;
+	--bg-deep: #e3e5e6;
+	--surface: #f8f9fa;
+	--border: #c9cbcd;
+	--border-strong: #a7aaad;
+	--text: #1b1c1d;
+	--muted: #5b5f63;
+	--accent: #3a3d40;
+	--accent-strong: #202224;
+	--accent-text: #f4f5f6;
+	--danger: #a23a2e;
+	--danger-bg: #f6e3de;
+	--ok: #3c6b2a;
+	--ok-bg: #e4ecd6;
+	--preview-bg: #1f2021;
+	--preview-text: #f4f5f6;
+
+	--role-membre: #7c8268;
+	--role-mod: #3f6fc2;
+	--role-admin: #b7483b;
+	--role-owner: #ab7e1f;
+
+	--radius: 3px;
+	--bevel-light: rgba(255, 255, 255, 0.55);
+	--bevel-dark: rgba(0, 0, 0, 0.28);
+
+	--font: 'IBM Plex Sans', system-ui, sans-serif;
+	--font-mc: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #16171a;
+		--bg-deep: #101113;
+		--surface: #1d1e21;
+		--border: #393b3e;
+		--border-strong: #52555a;
+		--text: #e8e9ea;
+		--muted: #a1a4a8;
+		--accent: #c7c9cb;
+		--accent-strong: #e4e5e6;
+		--accent-text: #15161a;
+		--danger: #e08a76;
+		--danger-bg: #351d16;
+		--ok: #9ad17e;
+		--ok-bg: #1d2a16;
+		--preview-bg: #0c0d0e;
+		--preview-text: #f4f5f6;
+
+		--role-membre: #9aa082;
+		--role-mod: #6f9bea;
+		--role-admin: #e2766a;
+		--role-owner: #e0ab45;
+
+		--bevel-light: rgba(255, 255, 255, 0.14);
+		--bevel-dark: rgba(0, 0, 0, 0.55);
+		color-scheme: dark;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+a {
+	color: var(--text);
+	text-decoration: underline;
+	text-decoration-color: var(--border-strong);
+	text-underline-offset: 0.15em;
+}
+
+a:hover {
+	text-decoration-color: currentColor;
+}
+
+h1 {
+	font-size: 1.5rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	margin: 0 0 1rem;
+}
+
+h2 {
+	font-size: 1.02rem;
+	font-weight: 600;
+	margin: 0 0 0.75rem;
+}
+
+h3 {
+	font-size: 0.9rem;
+	font-weight: 600;
+	margin: 0 0 0.4rem;
+}
+
+code {
+	font-family: var(--font-mc);
+	font-size: 0.9em;
+}
+
+/* Panells: contorn dur de 1px, sense ombra ni degradat. El relleu (bisell clar/fosc)
+   és el que dona tacte, no una ombra flotant com en un kit de targetes genèric. */
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 1.1rem 1.25rem;
+	margin-bottom: 1rem;
+}
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+	gap: 1rem;
+	align-items: start;
+}
+
+.muted {
+	color: var(--muted);
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: end;
+}
+
+label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+	font-size: 0.88rem;
+	margin-bottom: 0.75rem;
+}
+
+label.inline {
+	flex-direction: row;
+	align-items: center;
+	gap: 0.4rem;
+	margin: 0;
+}
+
+input,
+select,
+textarea {
+	font: inherit;
+	padding: 0.45rem 0.6rem;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	min-width: 0;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+input[type='checkbox'] {
+	width: auto;
+}
+
+/* Botons amb bisell: una vora clara a dalt/esquerra i fosca a baix/dreta, com
+   una casella de l'inventari. És l'únic moment "decoratiu" de tota la interfície
+   i es repeteix sempre igual, no és un efecte puntual. */
+button {
+	font: inherit;
+	font-weight: 500;
+	padding: 0.45rem 0.9rem;
+	border: 1px solid var(--accent-strong);
+	border-radius: var(--radius);
+	background: var(--accent);
+	color: var(--accent-text);
+	cursor: pointer;
+	white-space: nowrap;
+	box-shadow:
+		inset 1px 1px 0 var(--bevel-light),
+		inset -1px -1px 0 var(--bevel-dark);
+}
+
+button:active {
+	box-shadow:
+		inset -1px -1px 0 var(--bevel-light),
+		inset 1px 1px 0 var(--bevel-dark);
+}
+
+button.secondary {
+	background: var(--surface);
+	color: var(--text);
+	border-color: var(--border-strong);
+}
+
+button.danger {
+	background: var(--danger-bg);
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+button.small {
+	padding: 0.15rem 0.5rem;
+	font-size: 0.85rem;
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+	box-shadow: none;
+}
+
+.table-wrap {
+	overflow-x: auto;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+th,
+td {
+	text-align: left;
+	padding: 0.55rem 0.6rem;
+	border-bottom: 1px solid var(--border);
+	vertical-align: middle;
+}
+
+th {
+	font-size: 0.78rem;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+.preview {
+	background: var(--preview-bg);
+	color: var(--preview-text);
+	padding: 0.4rem 0.7rem;
+	border-radius: var(--radius);
+	display: inline-block;
+}
+
+/* Insígnia neutra (quan no hi ha color de grup a mostrar). */
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.1rem 0.55rem;
+	border-radius: 999px;
+	font-size: 0.8rem;
+	border: 1px solid var(--border-strong);
+}
+
+.badge .swatch {
+	width: 0.55rem;
+	height: 0.55rem;
+	border-radius: 50%;
+	background: var(--muted);
+	flex: none;
+}
+
+.dot {
+	display: inline-block;
+	width: 0.6rem;
+	height: 0.6rem;
+	border-radius: 50%;
+	background: var(--muted);
+}
+
+.dot.on {
+	background: var(--ok);
+}
+
+ul.plain {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+ul.plain li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.4rem 0;
+	border-bottom: 1px solid var(--border);
+}

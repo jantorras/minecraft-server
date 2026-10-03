@@ -1,0 +1,21 @@
+# Tags que els jugadors poden desbloquejar i triar amb /tags.
+# Per desbloquejar un tag cal el permís bridge.tag.<id> (a LuckPerms, per
+# jugador o per grup, permanent o temporal). El panell ho gestiona sol.
+#
+#   display:     com es veu (codis &)
+#   description: text que surt al menú
+#   material:    ítem que representa el tag al menú
+
+tags:
+  fundador:
+    display: '&6&l[Fundador]'
+    description: 'Hi era des del primer dia.'
+    material: NETHER_STAR
+  constructor:
+    display: '&a[Constructor]'
+    description: 'Per a qui aixeca les millors construccions.'
+    material: BRICKS
+  explorador:
+    display: '&b[Explorador]'
+    description: 'Ha vist més món que ningú.'
+    material: COMPASS

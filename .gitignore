@@ -1,0 +1,10 @@
+.gradle/
+build/
+.idea/
+*.iml
+node_modules/
+.env
+panel/data/
+panel/build/
+panel/.svelte-kit/
+deploy/plugins/*.jar

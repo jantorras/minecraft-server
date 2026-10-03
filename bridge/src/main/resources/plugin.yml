@@ -1,0 +1,18 @@
+name: Bridge
+version: '${version}'
+main: cat.servidor.bridge.BridgePlugin
+api-version: '26.2'
+description: API HTTP perquè el panell web gestioni rols, tags i TAB.
+depend: [LuckPerms]
+softdepend: [PlaceholderAPI, TAB]
+
+commands:
+  tags:
+    description: Obre el menú per triar el teu tag.
+    usage: /tags [off]
+    permission: bridge.command.tags
+
+permissions:
+  bridge.command.tags:
+    description: Permet fer servir /tags
+    default: true

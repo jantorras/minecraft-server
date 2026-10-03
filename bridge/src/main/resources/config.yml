@@ -1,0 +1,14 @@
+# Configuració del Bridge (API per al panell web)
+
+api:
+  # 127.0.0.1 = només accessible des de la mateixa màquina (el panell viu a la
+  # mateixa VM). Posa 0.0.0.0 només si el panell es mou a una altra màquina, i
+  # llavors limita el port amb el firewall.
+  host: 127.0.0.1
+  port: 8765
+  # Es genera automàticament el primer cop. El panell l'envia com a
+  # capçalera "Authorization: Bearer <token>".
+  token: ''
+
+# Prioritat dels prefixos/sufixos personals (per sobre dels de grup).
+personal-meta-priority: 1000
