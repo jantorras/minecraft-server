@@ -8,3 +8,4 @@ panel/data/
 panel/build/
 panel/.svelte-kit/
 deploy/plugins/*.jar
+deploy/plugins/velocity/*.jar

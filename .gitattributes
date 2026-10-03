@@ -1,0 +1,2 @@
+*.sh text eol=lf
+bridge/gradlew text eol=lf

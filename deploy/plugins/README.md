@@ -1,6 +1,7 @@
 # Plugins per a `install.sh`
 
-Posa aquí els `.jar` de:
+`install.sh` baixa sols aquests plugins si no hi són. Posa'ls aquí a mà només si en vols una
+versió concreta:
 
 - LuckPerms (Bukkit) — https://luckperms.net/download
 - PlaceholderAPI — https://hangar.papermc.io/HelpChat/PlaceholderAPI

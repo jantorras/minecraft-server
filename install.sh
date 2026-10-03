@@ -3,16 +3,16 @@
 # (i els proxys) no els crea aquest script: es creen després des del panell, a «Servidors».
 #
 # Ús:
-#   1. Copia tot aquest directori del projecte a la VM (scp -r, rsync, o git clone un cop hi hagi remot).
-#   2. Posa a deploy/plugins/ els .jar de LuckPerms (Bukkit), PlaceholderAPI i TAB
-#      (veure docs/01-infraestructura.md secció 5 per les URLs), i a deploy/plugins/velocity/
-#      els dels proxys (LuckPerms per a Velocity), si en vols. El bridge-*.jar ja hi és
-#      automàticament si l'has compilat (bridge/build/libs/).
-#   3. sudo ./install.sh
-#   4. Quan acabi, crea el primer usuari owner del panell (t'ho dirà el mateix script).
+#   git clone https://github.com/jantorras/minecraft-server.git && cd minecraft-server && sudo ./install.sh
 #
-# Variables opcionals (export abans d'executar per canviar els valors per defecte):
+# Fa les preguntes al principi (usuari del panell i, si vols, túnel de Cloudflare) i la resta
+# va sola: baixa els plugins (LuckPerms, PlaceholderAPI, TAB), compila el Bridge i deixa el
+# panell engegat. Un .jar que ja sigui a deploy/plugins/ (o deploy/plugins/velocity/ per als
+# proxys) no es torna a baixar, per si vols fixar-ne una versió concreta.
+#
+# Variables opcionals (export abans d'executar; amb totes posades no pregunta res):
 #   PANEL_ORIGIN, PANEL_PORT
+#   PANEL_ADMIN_USER, PANEL_ADMIN_PASSWORD  primer usuari (owner) del panell
 #   CLOUDFLARE_TUNNEL_TOKEN  token d'un túnel de Cloudflare; si no hi és, l'script el demana
 #                            (es pot deixar en blanc: el túnel és opcional)
 #
@@ -39,7 +39,24 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 [ -d "$SCRIPT_DIR/panel" ] && [ -d "$SCRIPT_DIR/bridge" ] || die "Executa'm des de l'arrel del projecte (on hi ha panel/ i bridge/)."
 
 # ---------------------------------------------------------------------------
-# Túnel de Cloudflare (opcional): es pregunta al principi per no haver d'esperar la resta.
+# Les preguntes, totes al principi: la resta de la instal·lació no necessita ningú davant.
+PANEL_ADMIN_USER="${PANEL_ADMIN_USER:-}"
+PANEL_ADMIN_PASSWORD="${PANEL_ADMIN_PASSWORD:-}"
+if [ -z "$PANEL_ADMIN_USER" ] && [ ! -f "$PANEL_DIR/app/panel/data/panel.db" ] && [ -t 0 ]; then
+	echo "Primer usuari (owner) del panell."
+	read -r -p "Nom d'usuari (en blanc per crear-lo més tard): " PANEL_ADMIN_USER
+fi
+[[ "$PANEL_ADMIN_USER" =~ ^[A-Za-z0-9_.-]*$ ]] || die "El nom d'usuari només pot tenir lletres, xifres, punts, guions i guions baixos."
+if [ -n "$PANEL_ADMIN_USER" ] && [ -z "$PANEL_ADMIN_PASSWORD" ]; then
+	[ -t 0 ] || die "Falta PANEL_ADMIN_PASSWORD per a l'usuari «$PANEL_ADMIN_USER»."
+	while [ "${#PANEL_ADMIN_PASSWORD}" -lt 10 ]; do
+		read -r -s -p "Contrasenya (mínim 10 caràcters): " PANEL_ADMIN_PASSWORD
+		echo
+	done
+fi
+[ -z "$PANEL_ADMIN_USER" ] || [ "${#PANEL_ADMIN_PASSWORD}" -ge 10 ] || die "La contrasenya ha de tenir com a mínim 10 caràcters."
+
+# Túnel de Cloudflare (opcional).
 CLOUDFLARE_TUNNEL_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 TUNNEL_COMPOSE="$MC_ROOT/cloudflared/docker-compose.yml"
 if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ] && [ ! -f "$TUNNEL_COMPOSE" ] && [ -t 0 ]; then
@@ -116,15 +133,56 @@ chmod 600 "$MC_ROOT/mariadb/docker-compose.yml"
 (cd "$MC_ROOT/mariadb" && docker compose up -d)
 
 # ---------------------------------------------------------------------------
+log "Baixant els plugins que faltin"
+mkdir -p "$SCRIPT_DIR/deploy/plugins/velocity"
+# URL de descàrrega de l'última versió de cada plugin. Si alguna falla només s'avisa:
+# el plugin es pot posar a mà a deploy/plugins/ i tornar a executar l'script.
+json() { curl -fsSL --max-time 30 "$1" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(($2)(JSON.parse(s))??'')}catch{}})"; }
+luckperms_url() { json https://metadata.luckperms.net/data/downloads "j=>j.downloads['$1']"; }
+papi_url() {
+	local version
+	version="$(curl -fsSL --max-time 30 'https://hangar.papermc.io/api/v1/projects/PlaceholderAPI/latest?channel=Release')" || return 0
+	[ -n "$version" ] && echo "https://hangar.papermc.io/api/v1/projects/PlaceholderAPI/versions/$version/PAPER/download"
+}
+# TAB publica diversos .jar per versió; el de nom més curt és el de l'última versió de Minecraft.
+tab_url() { json https://api.github.com/repos/NEZNAMY/TAB/releases/latest "j=>j.assets.map(a=>a.browser_download_url).filter(u=>u.endsWith('.jar')).sort((a,b)=>a.length-b.length)[0]"; }
+
+# fetch_plugin <carpeta> <patró del .jar que ja hi podria ser> <nom del fitxer> <url>
+fetch_plugin() {
+	local dir="$1" pattern="$2" file="$3" url="$4"
+	if compgen -G "$dir/$pattern" >/dev/null; then
+		echo "  $file: ja hi és"
+	elif [ -n "$url" ] && curl -fsSL --max-time 120 -o "$dir/$file.part" "$url"; then
+		mv "$dir/$file.part" "$dir/$file"
+		echo "  $file: baixat"
+	else
+		rm -f "$dir/$file.part"
+		echo "Avís: no he pogut baixar $file — posa'l a mà a $dir/ i torna a executar l'script."
+	fi
+}
+fetch_plugin "$SCRIPT_DIR/deploy/plugins" '[Ll]uck[Pp]erms*.jar' LuckPerms-Bukkit.jar "$(luckperms_url bukkit || true)"
+fetch_plugin "$SCRIPT_DIR/deploy/plugins" '[Pp]laceholder[Aa][Pp][Ii]*.jar' PlaceholderAPI.jar "$(papi_url || true)"
+fetch_plugin "$SCRIPT_DIR/deploy/plugins" 'TAB*.jar' TAB.jar "$(tab_url || true)"
+fetch_plugin "$SCRIPT_DIR/deploy/plugins/velocity" '[Ll]uck[Pp]erms*.jar' LuckPerms-Velocity.jar "$(luckperms_url velocity || true)"
+
+# ---------------------------------------------------------------------------
+log "Compilant el plugin Bridge"
+# Dins d'un contenidor amb el JDK: així no cal instal·lar Java a la VM.
+bridge_jar="$(compgen -G "$SCRIPT_DIR/bridge/build/libs/*.jar" | head -1 || true)"
+if [ -n "$bridge_jar" ] && [ -z "$(find "$SCRIPT_DIR/bridge/src" "$SCRIPT_DIR/bridge/build.gradle.kts" -newer "$bridge_jar" -print -quit)" ]; then
+	echo "Ja compilat."
+elif docker run --rm -v "$SCRIPT_DIR/bridge:/src" -w /src eclipse-temurin:25-jdk sh ./gradlew --no-daemon build; then
+	echo "Compilat."
+else
+	echo "Avís: no s'ha pogut compilar el Bridge; sense ell el panell no pot gestionar jugadors ni rols."
+fi
+
+# ---------------------------------------------------------------------------
 log "Catàleg de plugins (el panell els copia a cada servidor nou)"
 shopt -s nullglob
 paper_jars=("$SCRIPT_DIR"/deploy/plugins/*.jar "$SCRIPT_DIR"/bridge/build/libs/*.jar)
 velocity_jars=("$SCRIPT_DIR"/deploy/plugins/velocity/*.jar)
 shopt -u nullglob
-if [ ${#paper_jars[@]} -eq 0 ]; then
-	echo "Avís: no he trobat cap .jar a deploy/plugins/ ni bridge/build/libs/."
-	echo "  Els servidors nous arrencaran sense plugins; copia'ls i torna a córrer aquest script."
-fi
 for j in ${paper_jars[@]+"${paper_jars[@]}"}; do
 	cp "$j" "$MC_ROOT/plugins/paper/"
 	echo "  paper: $(basename "$j")"
@@ -142,6 +200,10 @@ rsync -a --delete --exclude node_modules --exclude .svelte-kit --exclude build -
 chown "$PANEL_USER:$PANEL_USER" "$MC_ROOT"
 chown -R "$PANEL_USER:$PANEL_USER" "$MC_ROOT/servers" "$MC_ROOT/backups" "$MC_ROOT/plugins" "$PANEL_DIR"
 
+# En tornar a executar l'script es conserva l'adreça que ja tenia el panell.
+if [ -z "${PANEL_ORIGIN:-}" ] && [ -f "$ENV_FILE" ]; then
+	PANEL_ORIGIN="$(grep -m1 '^ORIGIN=' "$ENV_FILE" | cut -d= -f2- || true)"
+fi
 LAN_IP="$(hostname -I | awk '{print $1}')"
 ORIGIN="${PANEL_ORIGIN:-http://$LAN_IP:$PANEL_PORT}"
 
@@ -168,6 +230,13 @@ chmod 600 "$ENV_FILE"
 # ---------------------------------------------------------------------------
 log "Instal·lant i compilant el panell (npm ci + build)"
 sudo -u "$PANEL_USER" bash -c "cd '$PANEL_DIR/app/panel' && npm ci && npm run build"
+
+if [ -n "$PANEL_ADMIN_USER" ]; then
+	log "Usuari «$PANEL_ADMIN_USER» (owner) del panell"
+	# La contrasenya passa per l'entorn, no per la línia d'ordres (que es veu amb `ps`).
+	PANEL_PASSWORD="$PANEL_ADMIN_PASSWORD" sudo --preserve-env=PANEL_PASSWORD -u "$PANEL_USER" \
+		bash -c "cd '$PANEL_DIR/app/panel' && npm run --silent create-user -- '$PANEL_ADMIN_USER' owner"
+fi
 
 # ---------------------------------------------------------------------------
 log "Servei systemd del panell"
@@ -227,16 +296,19 @@ Panell: $ORIGIN
 Contrasenya de la base de dades de LuckPerms: $LUCKPERMS_DB_PASSWORD
 (també és a $MC_ROOT/mariadb/docker-compose.yml i $ENV_FILE)
 
-Encara et falta:
-  1. Crea el primer usuari (owner) del panell:
-       sudo -u $PANEL_USER bash -c "cd $PANEL_DIR/app/panel && npm run create-user -- <nom> owner"
-  2. Entra a $ORIGIN i crea el primer servidor a «Servidors».
-  3. Fes-te owner/admin tu i els teus amics, i configura el TAB des de la pàgina «TAB».
+Ara:
+  - Entra a $ORIGIN i crea el primer servidor a «Servidors».
 EOF
+if [ -z "$PANEL_ADMIN_USER" ]; then
+	cat <<EOF
+  - Si encara no tens cap usuari del panell, crea'n un (owner):
+      sudo -u $PANEL_USER bash -c "cd $PANEL_DIR/app/panel && npm run create-user -- <nom> owner"
+EOF
+fi
 if [ -f "$TUNNEL_COMPOSE" ]; then
 	cat <<EOF
-  4. Túnel de Cloudflare: al tauler del túnel, afegeix un «Public Hostname» que apunti a
-       http://localhost:$PANEL_PORT
-     (el token és a $TUNNEL_COMPOSE; estat: docker logs cloudflared)
+  - Túnel de Cloudflare: al tauler del túnel, afegeix un «Public Hostname» que apunti a
+      http://localhost:$PANEL_PORT
+    (el token és a $TUNNEL_COMPOSE; estat: docker logs cloudflared)
 EOF
 fi

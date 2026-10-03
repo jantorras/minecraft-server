@@ -1,105 +1,111 @@
 # Servidor Minecraft
 
-Servidor Paper (només plugins) amb un panell web propi per gestionar rols, tags i TAB.
+Servidors de Minecraft (Paper, només plugins) en Docker, amb un panell web propi per crear-los i
+gestionar-los: jugadors, rols, tags, TAB, plugins, fitxers i consola.
+
+## Instal·lació ràpida
+
+En una VM Ubuntu Server nova:
+
+```bash
+git clone https://github.com/jantorras/minecraft-server.git && cd minecraft-server && sudo ./install.sh
+```
+
+Respon les preguntes del principi (usuari del panell i, si vols, túnel de Cloudflare), espera uns
+minuts, entra al panell i crea el primer servidor a **Servidors**. El detall és al
+[tutorial](#tutorial-installar-ho-en-una-vm-nova).
 
 ## Estructura
 
 | Carpeta | Què és |
 |---|---|
-| `docs/` | Guies d'instal·lació i operació |
+| `install.sh` | Instal·lador: deixa el panell i tot el que necessita a punt en una VM nova |
+| `panel/` | Panell web (SvelteKit) |
 | `bridge/` | Plugin de Paper que exposa una API HTTP per al panell (LuckPerms, tags, TAB) |
-| `panel/` | Panell web (SvelteKit): jugadors, rols, grups, tags, registre, usuaris del panell |
+| `deploy/plugins/` | Plugins que es copien als servidors nous (l'instal·lador els baixa sol) |
+| `dev/` | Script per provar-ho tot en local a Windows |
+| `docs/` | Guies antigues del muntatge manual d'un sol servidor (vegeu la nota de més avall) |
+
+## Què fa el panell
+
+| Pàgina | Què s'hi fa | Rol mínim |
+|---|---|---|
+| **Inici** | Resum del servidor triat i últimes accions | mod |
+| **Servidor** | Estat, CPU i memòria; iniciar, aturar, reiniciar i còpies de seguretat; consola en viu (xat inclòs) | mod per veure l'estat, admin per controlar-lo i veure la consola, owner per enviar ordres |
+| **Servidors** | Crear, reconfigurar i treure servidors normals (Paper) i proxys (Velocity) | mod per mirar, owner per canviar |
+| **Fitxers** | Navegar, editar, pujar i esborrar fitxers del servidor | admin |
+| **Plugins** | Veure tots els `.jar` del servidor, pujar-ne, activar-los, desactivar-los i esborrar-los | admin |
+| **Jugadors**, **Grups**, **Tags**, **TAB** | Rols de LuckPerms, prefixos, tags desbloquejables i la llista del tabulador | mod per mirar, admin per canviar |
+| **Registre** | Qui ha fet què des del panell | mod |
+| **Usuaris del panell** | Comptes per entrar al panell | owner |
+
+Quan hi ha més d'un servidor, el selector del menú tria sobre quin treballen totes les pàgines.
+Els rols de LuckPerms són compartits: un canvi de rol val per a tots els servidors.
 
 ## Fases
 
-- [x] **Fase 0** – Infraestructura: [docs/01-infraestructura.md](docs/01-infraestructura.md)
+- [x] **Fase 0** – Infraestructura
 - [x] **Fase 1** – Bridge: rols, prefixos, tags desbloquejables (`/tags`) i editor del TAB
-- [x] **Fase 2** – Panell web: login, jugadors, rols, grups, tags, TAB, control del servidor (Docker + RCON,
-  pàgina **Servidor**), gestor de fitxers (pàgina **Fitxers**), registre i usuaris del panell.
-  Desplegament: [docs/02-panell.md](docs/02-panell.md)
+- [x] **Fase 2** – Panell web: login, jugadors, rols, grups, tags, TAB, control del servidor, gestor de
+  fitxers, registre i usuaris del panell
+- [x] **Fase 2b** – Diversos servidors i proxys creats des del panell, gestor de plugins, consola en
+  viu i instal·lador d'una sola ordre (escrit; **encara no provat de cap a cap en una VM nova**)
 - [ ] **Fase 3** – Plugins per donar vida al server (esdeveniments, temporades, missions)
 - [ ] **Fase 4** – Extres (bot de Discord, whitelist des del panell)
 
-## Tutorial: instal·lar el servidor en una VM nova
+## Tutorial: instal·lar-ho en una VM nova
 
-Això munta tot el que cal en una VM Ubuntu Server buida: el servidor Paper en Docker, MariaDB
-per a LuckPerms, el plugin Bridge i el panell web, amb un tallafoc configurat.
+Això munta tot el que cal en una VM Ubuntu Server buida: Docker, MariaDB per a LuckPerms, els
+plugins, el Bridge i el panell web, amb un tallafoc configurat. Els servidors de Minecraft es
+creen després des del panell.
 
 ### Què necessites
 
-- Una VM **Ubuntu Server 24.04** (o 22.04) amb accés `sudo`. Recomanat: 2 vCPU, 6 GB de RAM
-  (el servidor té 3 GB de heap) i 20 GB de disc.
-- Un ordinador amb Java 25 **només si vols compilar el Bridge tu** (ho explico al pas 2).
-- Els `.jar` de LuckPerms, PlaceholderAPI i TAB (enllaços al pas 2).
+- Una VM **Ubuntu Server 24.04** (o 22.04) amb accés `sudo` i sortida a Internet. Recomanat:
+  2 vCPU, 6 GB de RAM i 20 GB de disc per a un servidor (cada servidor normal fa servir 3 GB de
+  memòria per defecte; un proxy, 512 MB).
+- Res més: ni Java ni cap plugin baixat a mà.
 
-### Pas 1: descarrega el projecte a la VM
+### Pas 1: descarrega el projecte i executa l'instal·lador
 
 ```bash
 git clone https://github.com/jantorras/minecraft-server.git
 cd minecraft-server
-```
-
-### Pas 2: posa els plugins a `deploy/plugins/`
-
-Descarrega aquests `.jar` i copia'ls a `deploy/plugins/`:
-
-| Plugin | Enllaç |
-|---|---|
-| LuckPerms (Bukkit) | https://luckperms.net/download |
-| PlaceholderAPI | https://hangar.papermc.io/HelpChat/PlaceholderAPI |
-| TAB | https://github.com/NEZNAMY/TAB/releases |
-
-També cal el **Bridge** (el plugin d'aquest projecte). Compila'l en el teu ordinador i copia el jar
-a `deploy/plugins/` juntament amb els altres:
-
-```
-cd bridge
-./gradlew build        # Windows: .\gradlew.bat build
-```
-
-El jar queda a `bridge/build/libs/bridge-<versió>.jar`. Copia'l a `deploy/plugins/` (o fes servir
-el mateix `scp` de més avall per enviar-lo a la VM).
-
-Quan tinguis tots els `.jar` a `deploy/plugins/` del teu ordinador, envia'ls a la VM (des del teu
-ordinador, en una terminal normal):
-
-```
-scp deploy/plugins/*.jar usuari@IP_DE_LA_VM:~/minecraft-server/deploy/plugins/
-```
-
-> Els `.jar` i el `build/` no es pugen a git, per això cal copiar-los a mà.
-
-### Pas 3: executa l'instal·lador
-
-```bash
 sudo ./install.sh
 ```
 
-Triga uns minuts. Fa això, per ordre: instal·la Docker i Node 24; crea l'usuari `panell`; crea
-la xarxa Docker `mcnet` i hi engega MariaDB (els rols de LuckPerms, compartits per tots els
-servidors); deixa els plugins a `/opt/minecraft/plugins/`; compila el panell i el deixa com a
-servei `panell`; i configura el tallafoc.
+Et fa unes preguntes al principi i després va sol (triga uns minuts):
 
-L'instal·lador **no crea cap servidor de Minecraft**: es creen després des del panell (pas 6).
+- **Usuari i contrasenya** del primer compte (`owner`) del panell.
+- **Token d'un túnel de Cloudflare**, si vols publicar el panell amb un domini. Deixa'l en blanc
+  si no en vols.
 
-Quan acabi, **apunta la contrasenya que imprimeix** (base de dades de LuckPerms). També es guarda
-a `/opt/minecraft/mariadb/docker-compose.yml` i `/opt/panell/app/panel/.env`, però només
-accessible per root i per `panell`.
+Tota la resta és automàtica: instal·la Docker i Node 24; baixa l'última versió de LuckPerms,
+PlaceholderAPI i TAB; compila el plugin Bridge dins d'un contenidor (no cal Java a la VM); engega
+MariaDB (els rols de LuckPerms, compartits per tots els servidors); compila el panell, el deixa
+com a servei `panell` i configura el tallafoc.
 
-### Pas 4: crea el primer usuari del panell
+L'instal·lador **no crea cap servidor de Minecraft**: es creen després des del panell (pas 3).
+
+Si vols una versió concreta d'un plugin, posa'n el `.jar` a `deploy/plugins/` abans d'executar
+l'instal·lador i no el baixarà (els dels proxys Velocity van a `deploy/plugins/velocity/`).
+
+Quan acabi imprimeix la contrasenya de la base de dades de LuckPerms. També es guarda a
+`/opt/minecraft/mariadb/docker-compose.yml` i `/opt/panell/app/panel/.env`, només accessible per
+root i per `panell`.
+
+Per afegir més comptes del panell des de la terminal (també es pot des de la pàgina **Usuaris**):
 
 ```bash
 sudo -u panell bash -c "cd /opt/panell/app/panel && npm run create-user -- <nom> owner"
 ```
 
-El rol pot ser `owner`, `admin` o `mod`. Fes-te `owner` tu.
-
-### Pas 5: entra al panell
+### Pas 2: entra al panell
 
 Obre `http://IP_DE_LA_VM:3000` al navegador i inicia sessió. Des de la pàgina **Usuaris** pots crear
 comptes per als amics. Després pots configurar la capçalera i el peu del TAB a la pàgina **TAB**.
 
-### Pas 6: crea el servidor
+### Pas 3: crea el servidor
 
 A la pàgina **Servidors** del panell (cal ser `owner`), omple «Nou servidor»: un nom, un
 identificador curt (per exemple `survival`), el tipus **Normal (Paper)** i el port públic `25565`.
@@ -114,9 +120,27 @@ del menú tries sobre quin servidor treballen la resta de pàgines.
 Cada servidor viu a `/opt/minecraft/servers/<identificador>/` (`docker-compose.yml` + `data/`).
 «Treure» un servidor n'atura el contenidor i en mou les dades a `/opt/minecraft/trash/`.
 
-### Pas 7: connecta't al joc
+### Pas 4: connecta't al joc
 
 A Minecraft, afegeix el servidor amb l'adreça `IP_DE_LA_VM` (i el port, si no és el 25565).
+
+### Afegir plugins
+
+A la pàgina **Plugins** puja el `.jar` i reinicia el servidor des de **Servidor**. També hi
+apareixen sols els `.jar` que copiïs a mà a `/opt/minecraft/servers/<identificador>/data/plugins/`.
+Un `owner` pot marcar un plugin «Al catàleg» perquè es copiï a tots els servidors que es creïn
+després.
+
+### Actualitzar el panell
+
+```bash
+cd minecraft-server && git pull && sudo ./install.sh
+```
+
+Tornar a executar l'instal·lador recompila el panell (i el Bridge, si ha canviat) i el reinicia.
+No toca els servidors ni les seves dades, conserva l'adreça del panell i no torna a fer les
+preguntes que ja estan resoltes. Un Bridge nou només arriba als servidors que es creïn després;
+als que ja existeixen, puja'l des de la pàgina **Plugins**.
 
 ### Variables opcionals
 
@@ -126,6 +150,7 @@ Exporta-les abans d'executar `install.sh` per canviar els valors per defecte:
 |---|---|---|
 | `PANEL_ORIGIN` | `http://IP:3000` | URL pública del panell (útil si hi poses un domini) |
 | `PANEL_PORT` | `3000` | Port del panell |
+| `PANEL_ADMIN_USER`, `PANEL_ADMIN_PASSWORD` | *(es demanen)* | Primer usuari (`owner`) del panell |
 | `CLOUDFLARE_TUNNEL_TOKEN` | *(es demana)* | Token d'un túnel de Cloudflare per publicar el panell (opcional) |
 
 **Túnel de Cloudflare (opcional).** En començar, l'instal·lador demana el token d'un túnel; deixa'l
@@ -137,13 +162,18 @@ Exemple: `sudo PANEL_PORT=8080 ./install.sh`
 
 ### Problemes habituals
 
-- **«no he trobat cap .jar»**: no has copiat els plugins a `deploy/plugins/` abans de l'instal·lador.
+- **«no he pogut baixar …»**: baixa aquell `.jar` a mà, posa'l a `deploy/plugins/` i torna a executar l'instal·lador.
 - **El panell no respon**: mira `sudo journalctl -u panell -n 50`, i que el port 3000 estigui obert
   (`sudo ufw status`).
+- **Puc mirar el panell però els botons donen error**: hi estàs entrant per una adreça diferent de
+  la configurada (`ORIGIN` a `/opt/panell/app/panel/.env`). Passa sobretot si fas servir el túnel
+  de Cloudflare i hi entres per la IP local.
+- **La compilació del Bridge falla**: compila'l al teu ordinador (vegeu «Compilar el Bridge»),
+  copia el `.jar` a `bridge/build/libs/` de la VM i torna a executar l'instal·lador.
 - **Un servidor es queda en «Error»**: la pàgina **Servidors** en diu el motiu; mira també
   `docker logs mc-<identificador> --tail 100` i prem «Reintentar».
 - **«el Bridge no respon»** després de crear un servidor: falta el `bridge-*.jar` a
-  `/opt/minecraft/plugins/paper/` (compila'l i torna a executar l'instal·lador).
+  `/opt/minecraft/plugins/paper/` (torna a executar l'instal·lador i mira si la compilació falla).
 - **Vols tornar a executar l'instal·lador**: es pot, és pensat per repetir-se sense trencar res.
 
 ### Seguretat: què no s'ha de pujar
@@ -151,6 +181,17 @@ Exemple: `sudo PANEL_PORT=8080 ./install.sh`
 Aquest repositori no conté cap contrasenya ni token. Les contrasenyes les genera l'instal·lador a
 la VM, i la base de dades del panell (`panel/data/`) queda fora de git. Mai no hi pujis els fitxers
 `.env` ni `docker-compose.yml`.
+
+La consola (RCON) i el Bridge de cada servidor només escolten a `127.0.0.1` de la VM. En canvi, el
+port públic de cada servidor queda obert a la xarxa encara que `ufw` no en tingui cap regla,
+perquè Docker publica els ports pel seu compte.
+
+### Instal·lacions antigues (un sol servidor)
+
+Les guies de `docs/` expliquen el muntatge manual anterior, amb un sol servidor configurat al
+`.env` (`MC_CONTAINER`, `BRIDGE_URL`...). El panell encara el fa servir mentre no es creï cap
+servidor des de **Servidors**; quan se'n crea un, el servidor antic deixa de sortir al panell.
+No executis el nou `install.sh` sobre una instal·lació antiga: en sobreescriuria el `.env`.
 
 ## Provar-ho tot en local (Windows)
 
@@ -165,7 +206,8 @@ Cada cop que el tornis a executar recompila el Bridge (reinicia el servidor per 
 
 ## Compilar el Bridge
 
-Cal Java 25.
+A la VM no cal: `install.sh` el compila dins d'un contenidor. Per compilar-lo al teu ordinador cal
+Java 25.
 
 ```
 cd bridge
@@ -177,7 +219,7 @@ El jar queda a `bridge/build/libs/bridge-<versió>.jar`.
 ## API del Bridge
 
 Totes les peticions porten `Authorization: Bearer <token>` (el token és a
-`plugins/Bridge/config.yml`). Respostes en JSON; els errors tenen la forma
+`plugins/Bridge/config.yml`; als servidors creats des del panell el genera el panell). Respostes en JSON; els errors tenen la forma
 `{"error": "missatge"}` amb el codi HTTP corresponent (400, 401, 404, 405, 409, 500).
 
 `{id}` de jugador = UUID o nom (el nom només funciona si el jugador ja ha entrat mai).
