@@ -9,6 +9,7 @@ import { bridgeFor } from './bridge';
 import { dockerRestart, dockerStatus } from './docker';
 import { rconCommand } from './rcon';
 import { PROVISION_STEPS, memoryMB, type ProvisionStep } from '$lib/servers';
+import { motdForPaper, motdForVelocity } from '$lib/mc';
 import {
 	backendsOf,
 	containerName,
@@ -65,7 +66,7 @@ function worldEnv(server: McServer): Record<string, string> {
 /** Les opcions del joc, com a variables que la imatge escriu a server.properties a cada arrencada. */
 function settingsEnv(server: McServer): Record<string, string> {
 	const s = server.settings;
-	const env: Record<string, string> = { MOTD: s.motd || server.name };
+	const env: Record<string, string> = { MOTD: motdForPaper(s.motd || server.name) };
 	const put = (key: string, value: string | number | boolean | undefined) => {
 		if (value !== undefined) env[key] = String(value);
 	};
@@ -248,7 +249,7 @@ export function patchVelocityToml(current: string | null, proxy: McServer, backe
 			'# Creat pel panell. Pots editar-lo, però la secció [servers] la reescriu el panell.',
 			'config-version = "2.7"',
 			`bind = "0.0.0.0:${VELOCITY_PORT}"`,
-			`motd = ${JSON.stringify(proxy.settings.motd || `<#09add3>${proxy.name}`)}`,
+			`motd = ${JSON.stringify(proxy.settings.motd ? motdForVelocity(proxy.settings.motd) : `<#09add3>${proxy.name}`)}`,
 			`show-max-players = ${proxy.settings.maxPlayers ?? 100}`,
 			'online-mode = true',
 			'force-key-authentication = true',
@@ -262,7 +263,7 @@ export function patchVelocityToml(current: string | null, proxy: McServer, backe
 	let normalized = current.replace(/\r\n/g, '\n');
 	// El missatge i el màxim de jugadors que es veuen a la llista de servidors, si s'han fixat al panell.
 	const { motd, maxPlayers } = proxy.settings;
-	if (motd) normalized = normalized.replace(/^motd\s*=.*$/m, () => `motd = ${JSON.stringify(motd)}`);
+	if (motd) normalized = normalized.replace(/^motd\s*=.*$/m, () => `motd = ${JSON.stringify(motdForVelocity(motd))}`);
 	if (maxPlayers !== undefined) normalized = normalized.replace(/^show-max-players\s*=.*$/m, () => `show-max-players = ${maxPlayers}`);
 	const section = /^\[servers\]\n[\s\S]*?(?=^\[|(?![\s\S]))/m;
 	if (!section.test(normalized)) return `${normalized.trimEnd()}\n\n${velocityServers(backends)}`;

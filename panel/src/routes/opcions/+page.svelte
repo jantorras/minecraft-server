@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import Flash from '$lib/components/Flash.svelte';
+	import MotdEditor from '$lib/components/MotdEditor.svelte';
 	import { DIFFICULTIES, DIFFICULTY_LABELS, GAMEMODES, GAMEMODE_LABELS } from '$lib/servers';
 
 	let { data, form } = $props();
@@ -21,13 +22,46 @@
 	] as const;
 
 	// Valors del formulari que tenen vista prèvia o lectura en viu.
-	let motd = $derived(data.kind === 'game' ? data.game.motd : data.kind === 'proxy' ? data.proxy.motd : '');
 	let maxPlayers = $derived(data.kind === 'game' ? data.game.maxPlayers : data.kind === 'proxy' ? data.proxy.maxPlayers : 0);
 	let view = $derived(data.kind === 'game' ? data.game.viewDistance : 10);
 	let simulation = $derived(data.kind === 'game' ? data.game.simulationDistance : 10);
 
-	/** Vista prèvia aproximada: sense les etiquetes de color (<red>, <#09add3>) ni els codis §x. */
-	const plainMotd = $derived(motd.replace(/<(newline|br)>|\\n/gi, String.fromCharCode(10)).replace(/<[^>]+>/g, '').replace(/[§&][0-9a-fk-or]/gi, ''));
+	// --- Imatge del servidor ---
+	let iconPreview = $state<string | null>(null);
+	let iconError = $state<string | null>(null);
+	const iconSrc = $derived(iconPreview ?? (data.kind !== 'none' && data.icon ? `/opcions/icon?v=${data.icon}` : null));
+
+	/** El joc només accepta PNG de 64×64: es retalla quadrada pel centre i s'escala aquí mateix. */
+	async function toIcon(file: File): Promise<Blob> {
+		const bitmap = await createImageBitmap(file);
+		const canvas = document.createElement('canvas');
+		canvas.width = canvas.height = 64;
+		const ctx = canvas.getContext('2d')!;
+		const side = Math.min(bitmap.width, bitmap.height);
+		// Una imatge ja petita (pixel art) s'amplia sense difuminar.
+		ctx.imageSmoothingEnabled = side > 64;
+		ctx.imageSmoothingQuality = 'high';
+		ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 64, 64);
+		return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('sense imatge'))), 'image/png'));
+	}
+
+	const iconSubmit: import('@sveltejs/kit').SubmitFunction = async ({ action, formData, cancel }) => {
+		iconError = null;
+		if (action.search.includes('iconRemove')) {
+			iconPreview = null;
+			return;
+		}
+		const file = formData.get('icon');
+		if (!(file instanceof File) || file.size === 0) return cancel();
+		try {
+			const icon = await toIcon(file);
+			formData.set('icon', icon, 'server-icon.png');
+			iconPreview = URL.createObjectURL(icon);
+		} catch {
+			iconError = 'No s’ha pogut llegir aquesta imatge. Prova amb un PNG o un JPG.';
+			cancel();
+		}
+	};
 
 	const confirmRestart = (what: string) =>
 		({ cancel }: { cancel: () => void }) => {
@@ -41,18 +75,29 @@
 
 <Flash {form} />
 
-{#snippet listing()}
-	<div class="listing" aria-label="Com es veu a la llista de servidors">
-		<div class="listing-icon" aria-hidden="true"></div>
-		<div class="listing-text">
-			<div class="listing-top">
-				<strong>{data.name}</strong>
-				<span class="listing-count">0/{maxPlayers || '?'}</span>
-			</div>
-			<div class="listing-motd">{plainMotd || '…'}</div>
-		</div>
+{#snippet iconControls()}
+	<div class="icon-row">
+		<label class="file">
+			Imatge del servidor
+			<input
+				type="file"
+				name="icon"
+				accept="image/*"
+				form="icon-form"
+				onchange={(e) => {
+					if (e.currentTarget.files?.length) e.currentTarget.form?.requestSubmit();
+				}}
+			/>
+			<span class="muted hint">Qualsevol imatge: es retalla quadrada i es deixa a 64×64, que és el que admet el joc.</span>
+		</label>
+		{#if data.kind !== 'none' && data.icon}
+			<button type="submit" class="secondary" form="icon-form" formaction="?/iconRemove">Treure la imatge</button>
+		{/if}
 	</div>
+	{#if iconError}<p class="problem hint">{iconError}</p>{/if}
 {/snippet}
+
+<form id="icon-form" method="POST" action="?/icon" enctype="multipart/form-data" use:enhance={iconSubmit} hidden></form>
 
 {#if data.kind === 'none'}
 	<section class="card">
@@ -73,15 +118,8 @@
 	<form method="POST" action="?/proxy" use:enhance={confirmRestart('el proxy')}>
 		<section class="card">
 			<h2>Llista de servidors</h2>
-			{@render listing()}
-			<label>
-				Missatge (MOTD)
-				<input name="motd" bind:value={motd} required maxlength="200" />
-				<span class="muted hint">
-					Colors amb etiquetes: <code>&lt;red&gt;</code>, <code>&lt;#09add3&gt;</code>, <code>&lt;bold&gt;</code>. Segona línia amb
-					<code>&lt;newline&gt;</code>.
-				</span>
-			</label>
+			<MotdEditor name="motd" value={data.proxy.motd} serverName={data.name ?? ''} {maxPlayers} icon={iconSrc} />
+			{@render iconControls()}
 			<label class="short">
 				Jugadors màxims que s’hi mostren
 				<input name="maxPlayers" type="number" min="1" bind:value={maxPlayers} required />
@@ -99,11 +137,8 @@
 		<div class="columns">
 			<section class="card">
 				<h2>Llista de servidors</h2>
-				{@render listing()}
-				<label>
-					Missatge (MOTD)
-					<input name="motd" bind:value={motd} required maxlength="120" />
-				</label>
+				<MotdEditor name="motd" value={g.motd} serverName={data.name ?? ''} {maxPlayers} icon={iconSrc} />
+				{@render iconControls()}
 				{#if data.proxyName}
 					<p class="muted hint">
 						Aquest servidor és darrere del proxy «{data.proxyName}»: a la llista dels jugadors s’hi veu el missatge del proxy, no
@@ -253,46 +288,18 @@
 		margin-bottom: 0.3rem;
 	}
 
-	/* Com surt el servidor a la llista del joc. */
-	.listing {
+	.icon-row {
 		display: flex;
-		gap: 0.7rem;
+		flex-wrap: wrap;
+		gap: 0.8rem;
 		align-items: center;
-		padding: 0.6rem 0.7rem;
-		background: var(--preview-bg);
-		color: var(--preview-text);
-		border-radius: var(--radius);
-		font-family: var(--font-mc);
-		font-size: 0.85rem;
 	}
-	.listing-icon {
-		width: 2.6rem;
-		height: 2.6rem;
-		flex: none;
-		background: #5b8731;
-		box-shadow:
-			inset 0 -0.9rem 0 #7a5a3a,
-			inset 2px 2px 0 rgba(255, 255, 255, 0.18),
-			inset -2px -2px 0 rgba(0, 0, 0, 0.35);
+	.file input {
+		padding: 0.3rem;
 	}
-	.listing-text {
-		flex: 1;
-		min-width: 0;
+	.problem {
+		color: var(--danger);
 	}
-	.listing-top {
-		display: flex;
-		justify-content: space-between;
-		gap: 0.6rem;
-	}
-	.listing-count {
-		opacity: 0.6;
-	}
-	.listing-motd {
-		white-space: pre-line;
-		opacity: 0.75;
-		overflow-wrap: anywhere;
-	}
-
 	.seg {
 		display: flex;
 		flex-wrap: wrap;

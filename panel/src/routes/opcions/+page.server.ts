@@ -2,7 +2,8 @@ import { error, fail } from '@sveltejs/kit';
 import { audit } from '$lib/server/audit';
 import { field, requireRole } from '$lib/server/actions';
 import { dockerStatus } from '$lib/server/docker';
-import { effectiveProxySettings, effectiveSettings } from '$lib/server/properties';
+import { effectiveProxySettings, effectiveSettings, iconVersion, removeIcon, writeIcon } from '$lib/server/properties';
+import { normalizeMotd } from '$lib/mc';
 import { ProvisionError, provisioning, refreshProxy, startProvision } from '$lib/server/provision';
 import { RconError, rconCommand } from '$lib/server/rcon';
 import { getServer, updateGameSettings, type McServer } from '$lib/server/servers';
@@ -36,13 +37,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Només els servidors creats des del panell: dels altres no en controla la configuració.
 	if (!mc?.managed || mc.status === 'creating') return { ...base, kind: 'none' as const };
 
+	const icon = await iconVersion(mc);
 	if (mc.type === 'velocity') {
-		return { ...base, kind: 'proxy' as const, proxy: await effectiveProxySettings(mc) };
+		return { ...base, kind: 'proxy' as const, icon, proxy: await effectiveProxySettings(mc) };
 	}
 	const running = (await dockerStatus(mc).catch(() => null))?.running ?? false;
 	const [game, whitelist] = await Promise.all([effectiveSettings(mc), running ? loadWhitelist(mc) : Promise.resolve(null)]);
 	const proxy = mc.proxyId === null ? null : getServer(mc.proxyId);
-	return { ...base, kind: 'game' as const, game, whitelist, proxyName: proxy?.name ?? null };
+	return { ...base, kind: 'game' as const, icon, game, whitelist, proxyName: proxy?.name ?? null };
 };
 
 function integer(form: FormData, key: string, min: number, max: number): number | null {
@@ -50,7 +52,39 @@ function integer(form: FormData, key: string, min: number, max: number): number 
 	return Number.isInteger(value) && value >= min && value <= max ? value : null;
 }
 
+/** El MOTD del formulari, amb codis &: una o dues línies. null si no és vàlid. */
+function motdField(form: FormData): string | null {
+	const motd = normalizeMotd(String(form.get('motd') ?? '')).replace(/\s+$/, '');
+	const lines = motd.split('\n');
+	if (!motd.trim() || lines.length > 2 || lines.some((line) => line.length > 150)) return null;
+	return motd;
+}
+
+const MOTD_ERROR = 'El missatge (MOTD) ha de tenir una o dues línies de fins a 150 caràcters';
+
 export const actions: Actions = {
+	icon: async ({ request, locals }) => {
+		const user = requireRole(locals, 'admin');
+		const mc = current(locals);
+		if (!mc.managed) return fail(400, { error: 'Aquest servidor no es pot configurar des del panell' });
+		const file = (await request.formData()).get('icon');
+		if (!(file instanceof File) || file.size === 0) return fail(400, { error: 'Cap imatge seleccionada' });
+		if (file.size > 512 * 1024) return fail(400, { error: 'La imatge pesa massa' });
+		const problem = await writeIcon(mc, Buffer.from(await file.arrayBuffer()));
+		if (problem) return fail(400, { error: problem });
+		audit(user, 'Canviar imatge del servidor', auditTarget(mc));
+		return { success: 'Imatge desada. Es veurà a la llista del joc quan el servidor es reiniciï.' };
+	},
+
+	iconRemove: async ({ locals }) => {
+		const user = requireRole(locals, 'admin');
+		const mc = current(locals);
+		if (!mc.managed) return fail(400, { error: 'Aquest servidor no es pot configurar des del panell' });
+		await removeIcon(mc);
+		audit(user, 'Treure imatge del servidor', auditTarget(mc));
+		return { success: 'Imatge treta. Es deixarà de veure quan el servidor es reiniciï.' };
+	},
+
 	game: async ({ request, locals }) => {
 		const user = requireRole(locals, 'admin');
 		const mc = current(locals);
@@ -58,8 +92,8 @@ export const actions: Actions = {
 		if (provisioning(mc.id)) return fail(409, { error: 'Encara s’està aplicant un canvi; espera que acabi' });
 		const form = await request.formData();
 
-		const motd = field(form, 'motd');
-		if (!motd || motd.length > 120 || /[\r\n]/.test(motd)) return fail(400, { error: 'El missatge (MOTD) ha de tenir entre 1 i 120 caràcters' });
+		const motd = motdField(form);
+		if (motd === null) return fail(400, { error: MOTD_ERROR });
 		const maxPlayers = integer(form, 'maxPlayers', 1, 1000);
 		const viewDistance = integer(form, 'viewDistance', 2, 32);
 		const simulationDistance = integer(form, 'simulationDistance', 2, 32);
@@ -101,8 +135,8 @@ export const actions: Actions = {
 		if (provisioning(mc.id)) return fail(409, { error: 'Encara s’està aplicant un canvi; espera que acabi' });
 		const form = await request.formData();
 
-		const motd = field(form, 'motd');
-		if (!motd || motd.length > 200 || /[\r\n]/.test(motd)) return fail(400, { error: 'El missatge (MOTD) ha de tenir entre 1 i 200 caràcters' });
+		const motd = motdField(form);
+		if (motd === null) return fail(400, { error: MOTD_ERROR });
 		const maxPlayers = integer(form, 'maxPlayers', 1, 100000);
 		if (maxPlayers === null) return fail(400, { error: 'El màxim de jugadors ha de ser un nombre positiu' });
 
