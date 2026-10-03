@@ -2,7 +2,15 @@ import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { audit } from '$lib/server/audit';
 import { field, requireRole } from '$lib/server/actions';
-import { ProvisionError, provisioning, removeServer, startProvision } from '$lib/server/provision';
+import { dockerLogs } from '$lib/server/docker';
+import {
+	ProvisionError,
+	provisionProgress,
+	provisionSteps,
+	provisioning,
+	removeServer,
+	startProvision
+} from '$lib/server/provision';
 import {
 	RESERVED_PORTS,
 	SLUG_PATTERN,
@@ -20,11 +28,22 @@ import type { Actions, PageServerLoad } from './$types';
 
 const YEAR = 60 * 60 * 24 * 365;
 
-export const load: PageServerLoad = () => {
+/** Per on va la creació d'un servidor, amb les últimes línies de la seva consola si ja arrenca. */
+async function creationOf(server: McServer) {
+	const progress = server.status === 'creating' ? provisionProgress(server.id) : null;
+	if (!progress) return null;
+	const booting = progress.step === 'boot' || progress.step === 'groups' || progress.step === 'proxy';
+	const log = booting ? await dockerLogs(server, 6).catch(() => []) : [];
+	return { ...progress, steps: provisionSteps(server), log };
+}
+
+export const load: PageServerLoad = async () => {
 	const servers = listServers();
+	const creations = await Promise.all(servers.map(creationOf));
 	return {
 		canProvision: provisionConfigured(),
-		list: servers.map((s) => ({
+		list: servers.map((s, i) => ({
+			creation: creations[i],
 			id: s.id,
 			slug: s.slug,
 			name: s.name,

@@ -8,6 +8,7 @@ import { env } from '$env/dynamic/private';
 import { bridgeFor } from './bridge';
 import { dockerRestart, dockerStatus } from './docker';
 import { rconCommand } from './rcon';
+import { PROVISION_STEPS, type ProvisionStep } from '$lib/servers';
 import {
 	backendsOf,
 	containerName,
@@ -332,17 +333,53 @@ async function run(id: number, previousProxyId: number | null): Promise<void> {
 	const server = getServer(id);
 	if (!server?.dir) throw new ProvisionError('Servidor desconegut');
 
+	enter(id, 'files');
 	await writeFiles(server);
-	await compose(server, ['up', '-d', '--remove-orphans'], 15 * 60_000);
+	enter(id, 'image');
+	// Si no es pot baixar (sense xarxa), encara pot funcionar amb la imatge que ja hi hagi.
+	await compose(server, ['pull'], 15 * 60_000).catch(() => {});
+	enter(id, 'container');
+	await compose(server, ['up', '-d', '--remove-orphans'], 5 * 60_000);
+	enter(id, 'boot');
 	await waitReady(server);
 
-	const warning = server.type === 'paper' ? await seedBaseGroups(server) : null;
+	let warning: string | null = null;
+	if (server.type === 'paper') {
+		enter(id, 'groups');
+		warning = await seedBaseGroups(server);
+	}
+	if (server.proxyId !== null || previousProxyId !== null) enter(id, 'proxy');
 	await refreshProxy(server.proxyId);
 	if (previousProxyId !== server.proxyId) await refreshProxy(previousProxyId);
 	setServerStatus(id, 'ready', warning);
 }
 
 const running = new Set<number>();
+
+// Per on va cada creació en curs. Només en memòria: si el panell es reinicia, la creació
+// també s'ha perdut (db.ts la marca com a error).
+const progress = new Map<number, { step: ProvisionStep; startedAt: number; stepStartedAt: number }>();
+
+function enter(id: number, step: ProvisionStep): void {
+	const now = Date.now();
+	progress.set(id, { step, startedAt: progress.get(id)?.startedAt ?? now, stepStartedAt: now });
+}
+
+/** Els passos que farà la creació d'aquest servidor, en ordre. */
+export function provisionSteps(server: McServer): ProvisionStep[] {
+	return PROVISION_STEPS.filter((step) => {
+		if (step === 'groups') return server.type === 'paper';
+		if (step === 'proxy') return server.proxyId !== null;
+		return true;
+	});
+}
+
+export function provisionProgress(id: number): { step: ProvisionStep; seconds: number; stepSeconds: number } | null {
+	const p = progress.get(id);
+	if (!p) return null;
+	const now = Date.now();
+	return { step: p.step, seconds: Math.round((now - p.startedAt) / 1000), stepSeconds: Math.round((now - p.stepStartedAt) / 1000) };
+}
 
 export function provisioning(id: number): boolean {
 	return running.has(id);
@@ -356,9 +393,13 @@ export function startProvision(id: number, previousProxyId: number | null = null
 	if (running.has(id)) return;
 	running.add(id);
 	setServerStatus(id, 'creating');
+	enter(id, 'files');
 	run(id, previousProxyId)
 		.catch((e: Error) => setServerStatus(id, 'error', e.message))
-		.finally(() => running.delete(id));
+		.finally(() => {
+			running.delete(id);
+			progress.delete(id);
+		});
 }
 
 /**
