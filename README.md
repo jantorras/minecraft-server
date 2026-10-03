@@ -97,7 +97,7 @@ root i per `panell`.
 Per afegir més comptes del panell des de la terminal (també es pot des de la pàgina **Usuaris**):
 
 ```bash
-sudo -u panell bash -c "cd /opt/panell/app/panel && npm run create-user -- <nom> owner"
+cd /opt/panell/app/panel && sudo -H -u panell npm run create-user -- <nom> owner
 ```
 
 ### Pas 2: entra al panell

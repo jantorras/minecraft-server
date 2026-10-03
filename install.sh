@@ -229,13 +229,15 @@ chmod 600 "$ENV_FILE"
 
 # ---------------------------------------------------------------------------
 log "Instal·lant i compilant el panell (npm ci + build)"
-sudo -u "$PANEL_USER" bash -c "cd '$PANEL_DIR/app/panel' && npm ci && npm run build"
+# Es canvia de directori abans del sudo: l'usuari «$PANEL_USER» no pot entrar a la carpeta des
+# d'on s'executa l'script (el home de qui l'ha clonat) i fallaria amb «Permission denied».
+(cd "$PANEL_DIR/app/panel" && sudo -H -u "$PANEL_USER" bash -c "npm ci && npm run build")
 
 if [ -n "$PANEL_ADMIN_USER" ]; then
 	log "Usuari «$PANEL_ADMIN_USER» (owner) del panell"
 	# La contrasenya passa per l'entorn, no per la línia d'ordres (que es veu amb `ps`).
-	PANEL_PASSWORD="$PANEL_ADMIN_PASSWORD" sudo --preserve-env=PANEL_PASSWORD -u "$PANEL_USER" \
-		bash -c "cd '$PANEL_DIR/app/panel' && npm run --silent create-user -- '$PANEL_ADMIN_USER' owner"
+	(cd "$PANEL_DIR/app/panel" && PANEL_PASSWORD="$PANEL_ADMIN_PASSWORD" sudo -H --preserve-env=PANEL_PASSWORD -u "$PANEL_USER" \
+		npm run --silent create-user -- "$PANEL_ADMIN_USER" owner)
 fi
 
 # ---------------------------------------------------------------------------
@@ -302,7 +304,7 @@ EOF
 if [ -z "$PANEL_ADMIN_USER" ]; then
 	cat <<EOF
   - Si encara no tens cap usuari del panell, crea'n un (owner):
-      sudo -u $PANEL_USER bash -c "cd $PANEL_DIR/app/panel && npm run create-user -- <nom> owner"
+      cd $PANEL_DIR/app/panel && sudo -H -u $PANEL_USER npm run create-user -- <nom> owner
 EOF
 fi
 if [ -f "$TUNNEL_COMPOSE" ]; then
