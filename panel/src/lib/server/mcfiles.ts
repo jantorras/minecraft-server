@@ -1,20 +1,20 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { env } from '$env/dynamic/private';
+import type { McServer } from './servers';
 
-// Gestor de fitxers directe sobre el directori de dades del servidor (bind mount de Docker).
+// Gestor de fitxers directe sobre el directori de dades d'un servidor (bind mount de Docker).
 // El panell viu a la mateixa VM, així que no cal cap API intermèdia: fs directe,
-// amb el mateix tipus de protecció anti-traversal que feia Crafty abans.
+// amb protecció perquè cap camí surti del directori del servidor.
 
 export class McFilesError extends Error {}
 
-export function mcFilesConfigured(): boolean {
-	return !!env.MC_DATA_DIR;
+export function mcFilesConfigured(server: McServer): boolean {
+	return !!server.dataDir;
 }
 
-function root(): string {
-	if (!env.MC_DATA_DIR) throw new McFilesError('MC_DATA_DIR no està configurat');
-	return path.resolve(env.MC_DATA_DIR);
+function root(server: McServer): string {
+	if (!server.dataDir) throw new McFilesError('Aquest servidor no té directori de dades');
+	return path.resolve(server.dataDir);
 }
 
 function cleanRel(rel: string): string {
@@ -24,9 +24,9 @@ function cleanRel(rel: string): string {
 		.join('/');
 }
 
-function resolveRel(rel: string): { abs: string; rel: string } {
+function resolveRel(server: McServer, rel: string): { abs: string; rel: string } {
 	const clean = cleanRel(rel);
-	const base = root();
+	const base = root(server);
 	const abs = clean ? path.join(base, clean) : base;
 	if (abs !== base && !abs.startsWith(base + path.sep)) throw new McFilesError('Camí no vàlid');
 	return { abs, rel: clean };
@@ -40,8 +40,8 @@ export interface McEntry {
 
 export type McBrowseResult = { kind: 'dir'; rel: string; entries: McEntry[] } | { kind: 'file'; rel: string; contents: string };
 
-export async function mcBrowse(rel = ''): Promise<McBrowseResult> {
-	const { abs, rel: cleanedRel } = resolveRel(rel);
+export async function mcBrowse(server: McServer, rel = ''): Promise<McBrowseResult> {
+	const { abs, rel: cleanedRel } = resolveRel(server, rel);
 	const st = await fs.stat(abs).catch(() => {
 		throw new McFilesError('No existeix aquest fitxer o carpeta');
 	});
@@ -63,20 +63,20 @@ export async function mcBrowse(rel = ''): Promise<McBrowseResult> {
 	return { kind: 'file', rel: cleanedRel, contents };
 }
 
-export async function mcWriteFile(rel: string, contents: string): Promise<void> {
-	const { abs } = resolveRel(rel);
+export async function mcWriteFile(server: McServer, rel: string, contents: string): Promise<void> {
+	const { abs } = resolveRel(server, rel);
 	await fs.writeFile(abs, contents, 'utf8');
 }
 
-export async function mcDelete(rel: string): Promise<void> {
-	const { abs, rel: cleanedRel } = resolveRel(rel);
+export async function mcDelete(server: McServer, rel: string): Promise<void> {
+	const { abs, rel: cleanedRel } = resolveRel(server, rel);
 	if (!cleanedRel) throw new McFilesError('No es pot esborrar l’arrel');
 	await fs.rm(abs, { recursive: true, force: false });
 }
 
-export async function mcCreateEntry(parentRel: string, name: string, directory: boolean): Promise<void> {
+export async function mcCreateEntry(server: McServer, parentRel: string, name: string, directory: boolean): Promise<void> {
 	if (!name || /[/\\]/.test(name)) throw new McFilesError('Nom invàlid');
-	const { abs: parentAbs } = resolveRel(parentRel);
+	const { abs: parentAbs } = resolveRel(server, parentRel);
 	const target = path.join(parentAbs, name);
 	try {
 		if (directory) await fs.mkdir(target);
@@ -87,16 +87,16 @@ export async function mcCreateEntry(parentRel: string, name: string, directory: 
 	}
 }
 
-export async function mcUpload(dirRel: string, filename: string, data: Buffer): Promise<void> {
+export async function mcUpload(server: McServer, dirRel: string, filename: string, data: Buffer): Promise<void> {
 	if (/[/\\]/.test(filename)) throw new McFilesError('Nom de fitxer invàlid');
-	const { abs: dirAbs } = resolveRel(dirRel);
+	const { abs: dirAbs } = resolveRel(server, dirRel);
 	await fs.writeFile(path.join(dirAbs, filename), data);
 }
 
 /** Llegeix `max-players` de server.properties, sense dependre de cap API. */
-export async function mcMaxPlayers(): Promise<number | null> {
+export async function mcMaxPlayers(server: McServer): Promise<number | null> {
 	try {
-		const raw = await fs.readFile(path.join(root(), 'server.properties'), 'utf8');
+		const raw = await fs.readFile(path.join(root(server), 'server.properties'), 'utf8');
 		const match = raw.match(/^max-players=(\d+)/m);
 		return match ? Number(match[1]) : null;
 	} catch {

@@ -19,12 +19,14 @@
 
 <svelte:head><title>Fitxers · Panell</title></svelte:head>
 
-<h1>Fitxers</h1>
+<h1>Fitxers{#if data.serverName}<span class="muted"> · {data.serverName}</span>{/if}</h1>
 
 <Flash {form} />
 
 {#if !data.filesEnabled}
-	<section class="card"><p class="muted">La gestió de fitxers no està configurada al panell (falta MC_DATA_DIR).</p></section>
+	<section class="card"><p class="muted">
+			{data.serverName ? 'Aquest servidor no té directori de dades al qual el panell pugui accedir.' : 'Encara no hi ha cap servidor.'}
+		</p></section>
 {:else if data.error}
 	<section class="card">
 		<p class="muted">{data.error}</p>

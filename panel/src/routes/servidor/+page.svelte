@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { enhance } from '$app/forms';
 	import Flash from '$lib/components/Flash.svelte';
 	import { formatDate } from '$lib/format';
@@ -17,18 +18,59 @@
 	];
 
 	const pct = (v: number | null) => Math.max(0, Math.min(100, v ?? 0));
+	let lines = $state<string[]>([]);
+	let logError = $state<string | null>(null);
+	let terminal = $state<HTMLPreElement>();
+
+	async function refreshLogs() {
+		if (document.hidden) return;
+		try {
+			const res = await fetch('/servidor/logs');
+			const body = await res.json();
+			if (!res.ok) throw new Error(body.message ?? `Error ${res.status}`);
+			// Només se segueix el final si ja s'hi era: qui ha pujat a llegir no es mou.
+			const atBottom = !terminal || terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 40;
+			lines = body.lines;
+			logError = null;
+			if (atBottom) {
+				await tick();
+				terminal?.scrollTo({ top: terminal.scrollHeight });
+			}
+		} catch (e) {
+			logError = (e as Error).message;
+		}
+	}
+
+	$effect(() => {
+		if (!canControl || !data.dockerEnabled) return;
+		refreshLogs();
+		const timer = setInterval(refreshLogs, 2000);
+		return () => clearInterval(timer);
+	});
+
 	const statusLabel = $derived(!s ? '—' : s.running ? 'Encès' : s.exitedWithError ? 'Ha petat' : 'Aturat');
 </script>
 
-<svelte:head><title>Servidor · Panell</title></svelte:head>
+<svelte:head><title>{data.mc?.name ?? 'Servidor'} · Panell</title></svelte:head>
 
-<h1>Servidor</h1>
+<h1>
+	{data.mc?.name ?? 'Servidor'}
+	{#if data.mc?.type === 'velocity'}<span class="badge">Proxy</span>{/if}
+</h1>
 
 <Flash {form} />
 
-{#if !data.dockerEnabled}
+{#if !data.mc}
 	<section class="card">
-		<p class="muted">Docker no està configurat al panell (falta MC_CONTAINER).</p>
+		<p class="muted">Encara no hi ha cap servidor. <a href="/servidors">Crea’n un a «Servidors»</a>.</p>
+	</section>
+{:else if data.mc.status === 'creating'}
+	<section class="card">
+		<p class="muted">Aquest servidor encara s’està creant. Segueix-ne l’estat a <a href="/servidors">Servidors</a>.</p>
+	</section>
+{:else if !data.dockerEnabled}
+	<section class="card">
+		<p class="muted">Aquest servidor no té cap contenidor Docker associat, així que des d’aquí no es pot controlar.</p>
 	</section>
 {:else if data.error}
 	<section class="card">
@@ -97,13 +139,28 @@
 		{/if}
 	</section>
 
-	{#if canConsole}
+	{#if canControl}
 		<section class="card console-card">
 			<h2>Consola</h2>
-			{#if !data.rconEnabled}
-				<p class="muted">RCON no està configurat (falten MC_RCON_HOST/PORT/PASSWORD).</p>
+			{#if logError}<p class="muted">No es pot llegir la consola: {logError}</p>{/if}
+			<pre class="terminal" bind:this={terminal}>{lines.length > 0 ? lines.join('\n') : 'Encara no hi ha res a la consola.'}</pre>
+			{#if !canConsole}
+				<p class="muted">Només un owner pot enviar ordres.</p>
+			{:else if !data.rconEnabled}
+				<p class="muted">
+					{data.mc?.type === 'velocity' ? 'Als proxys no s’hi poden enviar ordres des del panell.' : 'Aquest servidor no té RCON configurat.'}
+				</p>
 			{:else}
-				<form method="POST" action="?/command" use:enhance class="console-row">
+				<form
+					method="POST"
+					action="?/command"
+					use:enhance={() =>
+						async ({ update }) => {
+							await update();
+							refreshLogs();
+						}}
+					class="console-row"
+				>
 					<span class="prompt">/</span>
 					<input name="command" maxlength="256" placeholder="say Hola a tothom!" autocomplete="off" class="console-input" />
 					<button>Enviar</button>
@@ -130,6 +187,19 @@
 {/if}
 
 <style>
+	.terminal {
+		height: 26rem;
+		overflow: auto;
+		margin: 0 0 0.75rem;
+		padding: 0.7rem 0.8rem;
+		background: var(--bg-deep);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		font-size: 0.8rem;
+		line-height: 1.45;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
 	.hero {
 		position: relative;
 		overflow: hidden;

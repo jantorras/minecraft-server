@@ -9,7 +9,13 @@
 	const links = $derived([
 		{ href: '/', label: 'Inici', icon: 'home' },
 		{ href: '/servidor', label: 'Servidor', icon: 'server' },
-		...(hasRole(data.user, 'admin') ? [{ href: '/fitxers', label: 'Fitxers', icon: 'files' }] : []),
+		{ href: '/servidors', label: 'Servidors', icon: 'servers' },
+		...(hasRole(data.user, 'admin')
+			? [
+					{ href: '/fitxers', label: 'Fitxers', icon: 'files' },
+					{ href: '/plugins', label: 'Plugins', icon: 'plugins' }
+				]
+			: []),
 		{ href: '/players', label: 'Jugadors', icon: 'players' },
 		{ href: '/groups', label: 'Grups', icon: 'groups' },
 		{ href: '/tags', label: 'Tags', icon: 'tags' },
@@ -19,7 +25,8 @@
 		...(hasRole(data.user, 'owner') ? [{ href: '/users', label: 'Usuaris del panell', icon: 'users' }] : [])
 	]);
 
-	const isActive = (href: string) => (href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href));
+	const isActive = (href: string) =>
+		href === '/' ? page.url.pathname === '/' : page.url.pathname === href || page.url.pathname.startsWith(href + '/');
 </script>
 
 <svelte:head>
@@ -34,6 +41,18 @@
 				<span class="brand-mark" aria-hidden="true"></span>
 				Panell
 			</a>
+			{#if data.servers.length > 1}
+				<form method="POST" action="/servidors?/select" class="picker">
+					<input type="hidden" name="back" value={page.url.pathname + page.url.search} />
+					<select name="id" aria-label="Servidor" onchange={(e) => e.currentTarget.form?.requestSubmit()}>
+						{#each data.servers as s (s.id)}
+							<option value={s.id} selected={s.id === data.currentServerId}>
+								{s.name}{s.type === 'velocity' ? ' (proxy)' : ''}
+							</option>
+						{/each}
+					</select>
+				</form>
+			{/if}
 			<ul>
 				{#each links as link (link.href)}
 					<li>
@@ -47,8 +66,17 @@
 									<rect x="3" y="11.5" width="14" height="4.5" rx="1" stroke="currentColor" stroke-width="1.6" />
 									<circle cx="6" cy="5.75" r="0.9" fill="currentColor" />
 									<circle cx="6" cy="13.75" r="0.9" fill="currentColor" />
+								{:else if link.icon === 'servers'}
+									<rect x="2.5" y="3" width="6.5" height="6" rx="1" stroke="currentColor" stroke-width="1.6" />
+									<rect x="11" y="3" width="6.5" height="6" rx="1" stroke="currentColor" stroke-width="1.6" />
+									<rect x="2.5" y="11" width="6.5" height="6" rx="1" stroke="currentColor" stroke-width="1.6" />
+									<path d="M14.25 11.5v5M11.75 14h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
 								{:else if link.icon === 'files'}
 									<path d="M3 5.5a1 1 0 0 1 1-1h3.5l1.3 1.6H16a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+								{:else if link.icon === 'plugins'}
+									<path d="M7 3v4M13 3v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+									<path d="M4.5 7h11v3a5.5 5.5 0 0 1-11 0V7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+									<path d="M10 15.5V18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
 								{:else if link.icon === 'players'}
 									<circle cx="7.5" cy="7" r="2.6" stroke="currentColor" stroke-width="1.6" />
 									<circle cx="14" cy="8" r="2" stroke="currentColor" stroke-width="1.6" />
@@ -137,6 +165,9 @@
 			inset 1px 1px 0 var(--bevel-light),
 			inset -1px -1px 0 var(--bevel-dark);
 		flex: none;
+	}
+	.picker select {
+		width: 100%;
 	}
 	nav ul {
 		list-style: none;

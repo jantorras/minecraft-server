@@ -11,8 +11,11 @@
 
 <div class="grid">
 	<section class="card">
-		<h2>Servidor</h2>
-		{#if data.serverRunning !== null}
+		<h2>{data.serverName ?? 'Servidor'}</h2>
+		{#if data.serverName === null}
+			<p class="muted">Encara no hi ha cap servidor.</p>
+			<p><a href="/servidors">Crea’n un →</a></p>
+		{:else if data.serverRunning !== null}
 			<p>
 				<span class="dot" class:on={data.serverRunning}></span>
 				{data.serverRunning ? 'Encès' : 'Aturat'}
@@ -30,7 +33,7 @@
 		{#if data.dockerError}<p class="muted">Docker: {data.dockerError}</p>{/if}
 		{#if data.bridgeError}<p class="muted">Bridge: {data.bridgeError}</p>{/if}
 
-		<p><a href="/servidor">Veure i controlar el servidor →</a></p>
+		{#if data.serverName !== null}<p><a href="/servidor">Veure i controlar el servidor →</a></p>{/if}
 	</section>
 
 	<section class="card">

@@ -1,13 +1,13 @@
 import net from 'node:net';
-import { env } from '$env/dynamic/private';
+import type { McServer } from './servers';
 
 // Client mínim del protocol RCON (Source RCON), per enviar ordres de consola
-// al servidor sense dependre de Crafty. https://wiki.vg/RCON
+// a un servidor. https://wiki.vg/RCON
 
 export class RconError extends Error {}
 
-export function rconConfigured(): boolean {
-	return !!(env.MC_RCON_HOST && env.MC_RCON_PORT && env.MC_RCON_PASSWORD);
+export function rconConfigured(server: McServer): boolean {
+	return !!(server.rconPort && server.rconPassword);
 }
 
 const AUTH = 3;
@@ -32,11 +32,11 @@ function tryReadPacket(buf: Buffer): { id: number; payload: string; rest: Buffer
 	return { id, payload, rest: Buffer.from(buf.subarray(4 + length)) };
 }
 
-export async function rconCommand(command: string): Promise<string> {
-	if (!rconConfigured()) throw new RconError('RCON no està configurat (MC_RCON_HOST, MC_RCON_PORT, MC_RCON_PASSWORD)');
-	const host = env.MC_RCON_HOST!;
-	const port = Number(env.MC_RCON_PORT);
-	const password = env.MC_RCON_PASSWORD!;
+export async function rconCommand(server: McServer, command: string): Promise<string> {
+	if (!rconConfigured(server)) throw new RconError('Aquest servidor no té consola RCON');
+	const host = server.rconHost;
+	const port = server.rconPort!;
+	const password = server.rconPassword!;
 
 	return new Promise<string>((resolve, reject) => {
 		const socket = net.createConnection({ host, port });

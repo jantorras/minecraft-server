@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Instal·lació des de zero del servidor Minecraft (Docker) + panell, en una VM Ubuntu nova.
+# Instal·lació des de zero del panell en una VM Ubuntu nova. Els servidors de Minecraft
+# (i els proxys) no els crea aquest script: es creen després des del panell, a «Servidors».
 #
 # Ús:
 #   1. Copia tot aquest directori del projecte a la VM (scp -r, rsync, o git clone un cop hi hagi remot).
 #   2. Posa a deploy/plugins/ els .jar de LuckPerms (Bukkit), PlaceholderAPI i TAB
-#      (veure docs/01-infraestructura.md secció 5 per les URLs). El bridge-*.jar ja hi
-#      és automàticament si l'has compilat (bridge/build/libs/).
+#      (veure docs/01-infraestructura.md secció 5 per les URLs), i a deploy/plugins/velocity/
+#      els dels proxys (LuckPerms per a Velocity), si en vols. El bridge-*.jar ja hi és
+#      automàticament si l'has compilat (bridge/build/libs/).
 #   3. sudo ./install.sh
 #   4. Quan acabi, crea el primer usuari owner del panell (t'ho dirà el mateix script).
 #
 # Variables opcionals (export abans d'executar per canviar els valors per defecte):
-#   MC_CONTAINER, MC_VERSION, MC_MEMORY, MC_SERVER_NAME, PANEL_ORIGIN, PANEL_PORT
+#   PANEL_ORIGIN, PANEL_PORT
+#   CLOUDFLARE_TUNNEL_TOKEN  token d'un túnel de Cloudflare; si no hi és, l'script el demana
+#                            (es pot deixar en blanc: el túnel és opcional)
 #
 # Pensat per una VM Ubuntu Server nova i neta. És raonablement idempotent (es pot
 # tornar a córrer), però no s'ha provat de cap a cap contra una VM completament en
@@ -20,21 +24,33 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MC_CONTAINER="${MC_CONTAINER:-mc-claude}"
-MC_VERSION="${MC_VERSION:-26.2}"
-MC_MEMORY="${MC_MEMORY:-3G}"
-MC_SERVER_NAME="${MC_SERVER_NAME:-Claude}"
 PANEL_USER="panell"
 PANEL_DIR="/opt/panell"
-MC_DIR="/opt/minecraft"
+MC_ROOT="/opt/minecraft"
 PANEL_PORT="${PANEL_PORT:-3000}"
-BOOT_TIMEOUT=180 # segons a esperar que el servidor digui "Done (" en cada arrencada
+ENV_FILE="$PANEL_DIR/app/panel/.env"
+# Xarxa Docker que comparteixen els servidors, els proxys i MariaDB (el panell hi compta).
+NETWORK="mcnet"
 
 log() { echo -e "\n==> $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "Executa'm com a root (sudo ./install.sh)."
 [ -d "$SCRIPT_DIR/panel" ] && [ -d "$SCRIPT_DIR/bridge" ] || die "Executa'm des de l'arrel del projecte (on hi ha panel/ i bridge/)."
+
+# ---------------------------------------------------------------------------
+# Túnel de Cloudflare (opcional): es pregunta al principi per no haver d'esperar la resta.
+CLOUDFLARE_TUNNEL_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-}"
+TUNNEL_COMPOSE="$MC_ROOT/cloudflared/docker-compose.yml"
+if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ] && [ ! -f "$TUNNEL_COMPOSE" ] && [ -t 0 ]; then
+	echo "Vols publicar el panell amb un túnel de Cloudflare? (opcional)"
+	echo "  Crea el túnel a Cloudflare Zero Trust → Networks → Tunnels i enganxa'n el token."
+	read -r -p "Token del túnel (en blanc per saltar-ho): " CLOUDFLARE_TUNNEL_TOKEN
+fi
+if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ] && [ -z "${PANEL_ORIGIN:-}" ] && [ -t 0 ]; then
+	echo "Amb quina adreça s'entrarà al panell pel túnel? Els formularis només funcionen des d'aquesta adreça."
+	read -r -p "URL pública (p. ex. https://panell.exemple.cat; en blanc = la IP de la xarxa local): " PANEL_ORIGIN
+fi
 
 # ---------------------------------------------------------------------------
 log "Paquets base"
@@ -59,186 +75,92 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-log "MariaDB"
-if ! command -v mariadb &>/dev/null && ! command -v mysql &>/dev/null; then
-	apt-get install -y mariadb-server
-fi
-systemctl enable --now mariadb
-
-LUCKPERMS_DB_PASSWORD="${LUCKPERMS_DB_PASSWORD:-$(openssl rand -hex 16)}"
-mysql -e "
-	CREATE DATABASE IF NOT EXISTS luckperms;
-	CREATE USER IF NOT EXISTS 'luckperms'@'localhost' IDENTIFIED BY '${LUCKPERMS_DB_PASSWORD}';
-	ALTER USER 'luckperms'@'localhost' IDENTIFIED BY '${LUCKPERMS_DB_PASSWORD}';
-	GRANT ALL ON luckperms.* TO 'luckperms'@'localhost';
-	FLUSH PRIVILEGES;
-"
-echo "Base de dades luckperms llesta."
-
-# ---------------------------------------------------------------------------
 log "Usuari de sistema «$PANEL_USER»"
 id "$PANEL_USER" &>/dev/null || useradd --system --create-home --home-dir "$PANEL_DIR" --shell /usr/sbin/nologin "$PANEL_USER"
 usermod -aG docker "$PANEL_USER"
-PANEL_UID="$(id -u "$PANEL_USER")"
-PANEL_GID="$(id -g "$PANEL_USER")"
 
-mkdir -p "$MC_DIR/data/plugins" "$MC_DIR/backups" "$PANEL_DIR/app"
-chown -R "$PANEL_USER:$PANEL_USER" "$MC_DIR" "$PANEL_DIR"
+mkdir -p "$MC_ROOT/servers" "$MC_ROOT/backups" "$MC_ROOT/plugins/paper" "$MC_ROOT/plugins/velocity" "$MC_ROOT/mariadb" "$PANEL_DIR/app"
 
 # ---------------------------------------------------------------------------
-log "Plugins"
-shopt -s nullglob
-jars=("$SCRIPT_DIR"/deploy/plugins/*.jar "$SCRIPT_DIR"/bridge/build/libs/*.jar)
-shopt -u nullglob
-if [ ${#jars[@]} -eq 0 ]; then
-	echo "Avís: no he trobat cap .jar a deploy/plugins/ ni bridge/build/libs/."
-	echo "  El servidor arrencarà sense plugins; copia'ls i torna a córrer aquest script."
-else
-	for j in "${jars[@]}"; do
-		cp -n "$j" "$MC_DIR/data/plugins/"
-		echo "  $(basename "$j")"
-	done
+log "Xarxa Docker «$NETWORK»"
+docker network inspect "$NETWORK" &>/dev/null || docker network create "$NETWORK"
+
+# ---------------------------------------------------------------------------
+log "MariaDB (rols de LuckPerms, compartits per tots els servidors)"
+# La imatge només aplica la contrasenya el primer cop que crea la base de dades, així que
+# en tornar a córrer l'script cal reutilitzar la que ja hi ha al .env del panell.
+if [ -z "${LUCKPERMS_DB_PASSWORD:-}" ] && [ -f "$ENV_FILE" ]; then
+	LUCKPERMS_DB_PASSWORD="$(grep -m1 '^LP_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)"
 fi
-chown -R "$PANEL_USER:$PANEL_USER" "$MC_DIR/data"
-
-# ---------------------------------------------------------------------------
-log "docker-compose.yml"
-RCON_PASSWORD="${RCON_PASSWORD:-$(openssl rand -hex 24)}"
-cat >"$MC_DIR/docker-compose.yml" <<EOF
+LUCKPERMS_DB_PASSWORD="${LUCKPERMS_DB_PASSWORD:-$(openssl rand -hex 16)}"
+cat >"$MC_ROOT/mariadb/docker-compose.yml" <<EOF
 services:
-  minecraft:
-    image: itzg/minecraft-server
-    container_name: $MC_CONTAINER
+  mariadb:
+    image: mariadb:11
+    container_name: mariadb
     restart: unless-stopped
-    stdin_open: true
-    tty: true
-    network_mode: host
+    networks:
+      - $NETWORK
     environment:
-      EULA: "TRUE"
-      TYPE: "PAPER"
-      VERSION: "$MC_VERSION"
-      MEMORY: "$MC_MEMORY"
-      UID: "$PANEL_UID"
-      GID: "$PANEL_GID"
-      ENABLE_RCON: "true"
-      RCON_PASSWORD: "$RCON_PASSWORD"
-      RCON_PORT: "25575"
-      SERVER_NAME: "$MC_SERVER_NAME"
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: "luckperms"
+      MARIADB_USER: "luckperms"
+      MARIADB_PASSWORD: "$LUCKPERMS_DB_PASSWORD"
     volumes:
-      - $MC_DIR/data:/data
+      - ./data:/var/lib/mysql
+networks:
+  $NETWORK:
+    external: true
 EOF
-chmod 600 "$MC_DIR/docker-compose.yml"
-
-# docker logs acumula tot l'historial del contenidor encara que el reiniciem (stop/start,
-# a diferència de down/up, no el recrea), així que cal mirar només els logs de *després*
-# d'un moment donat — si no, un segon arrencada trobaria el "Done (" del primer cop i
-# diria que ja ha acabat sense haver esperat de debò.
-wait_for_done() {
-	local since="$1"
-	local waited=0
-	while ! docker logs --since "$since" "$MC_CONTAINER" 2>&1 | grep -q "Done ("; do
-		sleep 3
-		waited=$((waited + 3))
-		[ "$waited" -ge "$BOOT_TIMEOUT" ] && die "El servidor no ha arrencat en ${BOOT_TIMEOUT}s. Mira: docker logs $MC_CONTAINER"
-	done
-}
-
-log "Primera arrencada (genera les configuracions per defecte dels plugins)"
-boot_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-(cd "$MC_DIR" && docker compose up -d)
-wait_for_done "$boot_since"
-echo "Arrencat."
+chmod 600 "$MC_ROOT/mariadb/docker-compose.yml"
+(cd "$MC_ROOT/mariadb" && docker compose up -d)
 
 # ---------------------------------------------------------------------------
-LP_CONFIG="$MC_DIR/data/plugins/LuckPerms/config.yml"
-if [ -f "$LP_CONFIG" ]; then
-	log "Configurant LuckPerms → MariaDB"
-	(cd "$MC_DIR" && docker compose stop)
-	db_line="$(grep -n '^[[:space:]]*database:' "$LP_CONFIG" | head -1 | cut -d: -f1)"
-	if [ -n "$db_line" ]; then
-		range_start=$((db_line - 8))
-		[ "$range_start" -lt 1 ] && range_start=1
-		sed -i \
-			-e 's/^storage-method:.*/storage-method: mariadb/' \
-			-e "${range_start},$((db_line + 8)) s/^\([[:space:]]*address:\).*/\1 localhost/" \
-			-e "${range_start},$((db_line + 8)) s/^\([[:space:]]*database:\).*/\1 luckperms/" \
-			-e "$((db_line + 1)),$((db_line + 8)) s/^\([[:space:]]*username:\).*/\1 luckperms/" \
-			-e "$((db_line + 1)),$((db_line + 8)) s/^\([[:space:]]*password:\).*/\1 '${LUCKPERMS_DB_PASSWORD}'/" \
-			"$LP_CONFIG"
-	else
-		echo "Avís: no trobo la clau «database:» a $LP_CONFIG — revisa-ho a mà (veure docs/01)."
-	fi
-	boot_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-	(cd "$MC_DIR" && docker compose start)
-	wait_for_done "$boot_since"
-	echo "LuckPerms reconfigurat i servidor tornat a arrencar."
-else
-	echo "Avís: no hi ha plugins/LuckPerms/config.yml (el jar no s'ha copiat?) — salto aquest pas."
+log "Catàleg de plugins (el panell els copia a cada servidor nou)"
+shopt -s nullglob
+paper_jars=("$SCRIPT_DIR"/deploy/plugins/*.jar "$SCRIPT_DIR"/bridge/build/libs/*.jar)
+velocity_jars=("$SCRIPT_DIR"/deploy/plugins/velocity/*.jar)
+shopt -u nullglob
+if [ ${#paper_jars[@]} -eq 0 ]; then
+	echo "Avís: no he trobat cap .jar a deploy/plugins/ ni bridge/build/libs/."
+	echo "  Els servidors nous arrencaran sense plugins; copia'ls i torna a córrer aquest script."
 fi
-
-# ---------------------------------------------------------------------------
-log "Grups base de LuckPerms"
-# Una ordre RCON per crida (amb una petita pausa): enviar-les totes de cop pel mateix
-# stream fa que LuckPerms es queixi de "another command is being executed" i en
-# perdi alguna.
-lp_groups=(
-	"lp creategroup membre"
-	"lp creategroup mod"
-	"lp creategroup admin"
-	"lp creategroup owner"
-	"lp group membre parent add default"
-	"lp group mod parent add membre"
-	"lp group admin parent add mod"
-	"lp group owner parent add admin"
-	"lp group default setweight 0"
-	"lp group membre setweight 10"
-	"lp group mod setweight 50"
-	"lp group admin setweight 100"
-	"lp group owner setweight 1000"
-	'lp group membre meta setprefix 10 "&7[Membre] "'
-	'lp group mod meta setprefix 50 "&9[Mod] "'
-	'lp group admin meta setprefix 100 "&c[Admin] "'
-	'lp group owner meta setprefix 1000 "&6[Owner] "'
-)
-for cmd in "${lp_groups[@]}"; do
-	docker exec "$MC_CONTAINER" rcon-cli "$cmd" >/dev/null || echo "Avís: ha fallat «$cmd»"
-	sleep 0.3
+for j in ${paper_jars[@]+"${paper_jars[@]}"}; do
+	cp "$j" "$MC_ROOT/plugins/paper/"
+	echo "  paper: $(basename "$j")"
+done
+for j in ${velocity_jars[@]+"${velocity_jars[@]}"}; do
+	cp "$j" "$MC_ROOT/plugins/velocity/"
+	echo "  velocity: $(basename "$j")"
 done
 
 # ---------------------------------------------------------------------------
-BRIDGE_CONFIG="$MC_DIR/data/plugins/Bridge/config.yml"
-BRIDGE_TOKEN=""
-if [ -f "$BRIDGE_CONFIG" ]; then
-	BRIDGE_TOKEN="$(grep -m1 '^[[:space:]]*token:' "$BRIDGE_CONFIG" | awk '{print $2}')"
-fi
-[ -n "$BRIDGE_TOKEN" ] || echo "Avís: no he trobat el token del Bridge a $BRIDGE_CONFIG — l'hauràs d'afegir a mà a .env."
-
-# ---------------------------------------------------------------------------
 log "Copiant el panell a $PANEL_DIR/app"
-rsync -a --delete --exclude node_modules --exclude .svelte-kit --exclude build --exclude data "$SCRIPT_DIR/panel/" "$PANEL_DIR/app/panel/"
-chown -R "$PANEL_USER:$PANEL_USER" "$PANEL_DIR"
+rsync -a --delete --exclude node_modules --exclude .svelte-kit --exclude build --exclude data --exclude .env "$SCRIPT_DIR/panel/" "$PANEL_DIR/app/panel/"
+
+# El directori de MariaDB és del contenidor; la resta, del panell.
+chown "$PANEL_USER:$PANEL_USER" "$MC_ROOT"
+chown -R "$PANEL_USER:$PANEL_USER" "$MC_ROOT/servers" "$MC_ROOT/backups" "$MC_ROOT/plugins" "$PANEL_DIR"
 
 LAN_IP="$(hostname -I | awk '{print $1}')"
 ORIGIN="${PANEL_ORIGIN:-http://$LAN_IP:$PANEL_PORT}"
 
 log "Generant .env del panell"
-ENV_FILE="$PANEL_DIR/app/panel/.env"
 cat >"$ENV_FILE" <<EOF
-BRIDGE_URL=http://127.0.0.1:8765
-BRIDGE_TOKEN=$BRIDGE_TOKEN
-
 DATABASE_PATH=data/panel.db
 
 ORIGIN=$ORIGIN
 PORT=$PANEL_PORT
 HOST=0.0.0.0
 
-MC_CONTAINER=$MC_CONTAINER
-MC_DATA_DIR=$MC_DIR/data
-MC_BACKUPS_DIR=$MC_DIR/backups
-MC_RCON_HOST=127.0.0.1
-MC_RCON_PORT=25575
-MC_RCON_PASSWORD=$RCON_PASSWORD
+# On viuen els servidors que crea el panell (servers/, backups/, plugins/, trash/)
+MC_ROOT=$MC_ROOT
+
+# Base de dades de LuckPerms (contenidor «mariadb» a la xarxa $NETWORK)
+LP_DB_ADDRESS=mariadb
+LP_DB_NAME=luckperms
+LP_DB_USER=luckperms
+LP_DB_PASSWORD=$LUCKPERMS_DB_PASSWORD
 EOF
 chown "$PANEL_USER:$PANEL_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -252,7 +174,7 @@ log "Servei systemd del panell"
 cat >/etc/systemd/system/panell.service <<EOF
 [Unit]
 Description=Panell del servidor Minecraft
-After=network.target docker.service mariadb.service
+After=network.target docker.service
 
 [Service]
 User=$PANEL_USER
@@ -264,29 +186,57 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now panell
+systemctl enable panell
+systemctl restart panell
+
+# ---------------------------------------------------------------------------
+if [ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+	log "Túnel de Cloudflare"
+	mkdir -p "$(dirname "$TUNNEL_COMPOSE")"
+	# Xarxa del host: el túnel ha de poder arribar al panell a localhost:$PANEL_PORT.
+	cat >"$TUNNEL_COMPOSE" <<EOF
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "$CLOUDFLARE_TUNNEL_TOKEN"
+EOF
+	chmod 600 "$TUNNEL_COMPOSE"
+	(cd "$(dirname "$TUNNEL_COMPOSE")" && docker compose up -d)
+elif [ -f "$TUNNEL_COMPOSE" ]; then
+	echo "Túnel de Cloudflare: es manté el que ja hi havia configurat."
+fi
 
 # ---------------------------------------------------------------------------
 log "Tallafoc"
+# Només cal obrir el panell: els ports que Docker publica (els dels servidors) no passen
+# per ufw, i RCON i el Bridge de cada servidor només es publiquen a 127.0.0.1.
 ufw allow OpenSSH
-ufw allow 25565/tcp
 ufw allow "$PANEL_PORT"/tcp
-ufw deny 25575/tcp # RCON: només per localhost (el trànsit per loopback no passa pel tallafoc)
 ufw --force enable
 
 # ---------------------------------------------------------------------------
 log "Fet!"
 cat <<EOF
 
-Panell:            $ORIGIN
-Servidor Minecraft: port 25565
+Panell: $ORIGIN
 Contrasenya de la base de dades de LuckPerms: $LUCKPERMS_DB_PASSWORD
-Contrasenya de RCON:                          $RCON_PASSWORD
-(també són a $MC_DIR/docker-compose.yml i $ENV_FILE)
+(també és a $MC_ROOT/mariadb/docker-compose.yml i $ENV_FILE)
 
 Encara et falta:
   1. Crea el primer usuari (owner) del panell:
        sudo -u $PANEL_USER bash -c "cd $PANEL_DIR/app/panel && npm run create-user -- <nom> owner"
-  2. Entra a $ORIGIN i fes-te owner/admin tu i els teus amics.
-  3. Configura la capçalera/peu del TAB des de la pàgina «TAB» del panell.
+  2. Entra a $ORIGIN i crea el primer servidor a «Servidors».
+  3. Fes-te owner/admin tu i els teus amics, i configura el TAB des de la pàgina «TAB».
 EOF
+if [ -f "$TUNNEL_COMPOSE" ]; then
+	cat <<EOF
+  4. Túnel de Cloudflare: al tauler del túnel, afegeix un «Public Hostname» que apunti a
+       http://localhost:$PANEL_PORT
+     (el token és a $TUNNEL_COMPOSE; estat: docker logs cloudflared)
+EOF
+fi

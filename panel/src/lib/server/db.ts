@@ -36,4 +36,26 @@ db.exec(`
 		details  TEXT
 	);
 	CREATE INDEX IF NOT EXISTS audit_at ON audit(at DESC);
+
+	CREATE TABLE IF NOT EXISTS servers (
+		id                INTEGER PRIMARY KEY AUTOINCREMENT,
+		slug              TEXT NOT NULL UNIQUE,
+		name              TEXT NOT NULL,
+		type              TEXT NOT NULL CHECK (type IN ('paper', 'velocity')),
+		version           TEXT NOT NULL,
+		memory            TEXT NOT NULL,
+		host_port         INTEGER UNIQUE,
+		proxy_id          INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+		rcon_password     TEXT,
+		bridge_token      TEXT,
+		forwarding_secret TEXT,
+		status            TEXT NOT NULL DEFAULT 'creating' CHECK (status IN ('creating', 'ready', 'error')),
+		status_detail     TEXT,
+		created_at        INTEGER NOT NULL
+	);
 `);
+
+// Una creació que estava a mitges quan el panell es va aturar no continuarà sola.
+db.prepare("UPDATE servers SET status = 'error', status_detail = ? WHERE status = 'creating'").run(
+	'El panell es va reiniciar mentre es creava. Torna-ho a provar.'
+);

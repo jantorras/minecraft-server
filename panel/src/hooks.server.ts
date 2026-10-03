@@ -1,10 +1,13 @@
 import { redirect, type Handle } from '@sveltejs/kit';
 import { SESSION_COOKIE, SESSION_MAX_AGE, validateSession } from '$lib/server/auth';
+import { resolveCurrentServer } from '$lib/server/servers';
+import { SERVER_COOKIE } from '$lib/servers';
 
 const PUBLIC_PATHS = ['/login'];
 
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
+	event.locals.server = null;
 
 	const token = event.cookies.get(SESSION_COOKIE);
 	if (token) {
@@ -28,6 +31,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 	if (!event.locals.user && !PUBLIC_PATHS.includes(event.url.pathname)) {
 		redirect(303, '/login');
 	}
+
+	event.locals.server = resolveCurrentServer(event.cookies.get(SERVER_COOKIE));
 
 	const response = await resolve(event);
 	response.headers.set('X-Frame-Options', 'DENY');

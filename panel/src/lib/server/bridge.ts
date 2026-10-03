@@ -1,4 +1,5 @@
-import { env } from '$env/dynamic/private';
+import { getRequestEvent } from '$app/server';
+import type { McServer } from './servers';
 
 // Tipus que retorna el plugin Bridge (veure README de l'arrel).
 
@@ -67,25 +68,28 @@ export class BridgeError extends Error {
 	}
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-	const base = env.BRIDGE_URL || 'http://127.0.0.1:8765';
+async function rawCall<T>(server: McServer | null, method: string, path: string, body?: unknown): Promise<T> {
+	if (!server) throw new BridgeError(503, 'Encara no hi ha cap servidor. Crea’n un a «Servidors».');
+	if (!server.bridgeUrl) {
+		throw new BridgeError(503, `«${server.name}» és un proxy i no té Bridge. Tria un servidor normal al selector.`);
+	}
 	let res: Response;
 	try {
-		res = await fetch(base + path, {
+		res = await fetch(server.bridgeUrl + path, {
 			method,
 			headers: {
-				Authorization: `Bearer ${env.BRIDGE_TOKEN ?? ''}`,
+				Authorization: `Bearer ${server.bridgeToken ?? ''}`,
 				'Content-Type': 'application/json'
 			},
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal: AbortSignal.timeout(10_000)
 		});
 	} catch {
-		throw new BridgeError(503, 'No es pot connectar amb el servidor de Minecraft. Està encès?');
+		throw new BridgeError(503, `No es pot connectar amb el servidor «${server.name}». Està encès?`);
 	}
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
-		if (res.status === 401) throw new BridgeError(502, 'El token del Bridge no és correcte (BRIDGE_TOKEN)');
+		if (res.status === 401) throw new BridgeError(502, 'El token del Bridge no és correcte');
 		throw new BridgeError(res.status, data.error ?? `Error ${res.status} del Bridge`);
 	}
 	return data as T;
@@ -93,7 +97,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 const enc = encodeURIComponent;
 
-export const bridge = {
+function api(target: () => McServer | null) {
+	const call = <T>(method: string, path: string, body?: unknown) => rawCall<T>(target(), method, path, body);
+	return {
 	health: () => call<Health>('GET', '/api/health'),
 
 	groups: () => call<Group[]>('GET', '/api/groups'),
@@ -129,4 +135,11 @@ export const bridge = {
 	applyEffect: (id: string, effect: string, durationSeconds: number, amplifier: number) =>
 		call<void>('POST', `/api/players/${enc(id)}/effect`, { effect, durationSeconds, amplifier }),
 	clearEffects: (id: string) => call<void>('DELETE', `/api/players/${enc(id)}/effect`)
-};
+	};
+}
+
+/** El Bridge del servidor triat al selector (el de la petició en curs). */
+export const bridge = api(() => getRequestEvent().locals.server);
+
+/** El Bridge d'un servidor concret, fora d'una petició (p. ex. mentre es crea). */
+export const bridgeFor = (server: McServer) => api(() => server);

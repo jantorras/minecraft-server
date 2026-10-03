@@ -1,5 +1,6 @@
 import { bridge, BridgeError, type Health, type Player } from '$lib/server/bridge';
-import { DockerError, dockerConfigured, dockerStatus } from '$lib/server/docker';
+import { DockerError, dockerStatus } from '$lib/server/docker';
+import type { McServer } from '$lib/server/servers';
 import { listAudit } from '$lib/server/audit';
 import type { PageServerLoad } from './$types';
 
@@ -13,10 +14,10 @@ async function loadBridge(): Promise<{ health: Health | null; online: Player[]; 
 	}
 }
 
-async function loadServerRunning(): Promise<{ serverRunning: boolean | null; dockerError: string | null }> {
-	if (!dockerConfigured()) return { serverRunning: null, dockerError: null };
+async function loadServerRunning(server: McServer | null): Promise<{ serverRunning: boolean | null; dockerError: string | null }> {
+	if (!server?.container) return { serverRunning: null, dockerError: null };
 	try {
-		const status = await dockerStatus();
+		const status = await dockerStatus(server);
 		return { serverRunning: status.running, dockerError: null };
 	} catch (e) {
 		if (!(e instanceof DockerError)) throw e;
@@ -24,7 +25,7 @@ async function loadServerRunning(): Promise<{ serverRunning: boolean | null; doc
 	}
 }
 
-export const load: PageServerLoad = async () => {
-	const [b, d] = await Promise.all([loadBridge(), loadServerRunning()]);
-	return { ...b, ...d, dockerEnabled: dockerConfigured(), recent: listAudit(8) };
+export const load: PageServerLoad = async ({ locals }) => {
+	const [b, d] = await Promise.all([loadBridge(), loadServerRunning(locals.server)]);
+	return { ...b, ...d, serverName: locals.server?.name ?? null, recent: listAudit(8) };
 };

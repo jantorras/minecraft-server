@@ -75,14 +75,16 @@ scp deploy/plugins/*.jar usuari@IP_DE_LA_VM:~/minecraft-server/deploy/plugins/
 sudo ./install.sh
 ```
 
-Triga uns minuts. Fa això, per ordre: instal·la Docker, Node 24 i MariaDB; crea l'usuari
-`panell`; arrenca el servidor una vegada per generar les configuracions dels plugins; passa
-LuckPerms a MariaDB; crea els grups base (`membre`, `mod`, `admin`, `owner`); compila el panell
-i el deixa com a servei `panell`; i configura el tallafoc.
+Triga uns minuts. Fa això, per ordre: instal·la Docker i Node 24; crea l'usuari `panell`; crea
+la xarxa Docker `mcnet` i hi engega MariaDB (els rols de LuckPerms, compartits per tots els
+servidors); deixa els plugins a `/opt/minecraft/plugins/`; compila el panell i el deixa com a
+servei `panell`; i configura el tallafoc.
 
-Quan acabi, **apunta les contrasenyes que imprimeix** (base de dades de LuckPerms i RCON). També
-es guarden a `/opt/minecraft/docker-compose.yml` i `/opt/panell/app/panel/.env`, però només
-accessibles per root i per `panell`.
+L'instal·lador **no crea cap servidor de Minecraft**: es creen després des del panell (pas 6).
+
+Quan acabi, **apunta la contrasenya que imprimeix** (base de dades de LuckPerms). També es guarda
+a `/opt/minecraft/mariadb/docker-compose.yml` i `/opt/panell/app/panel/.env`, però només
+accessible per root i per `panell`.
 
 ### Pas 4: crea el primer usuari del panell
 
@@ -97,10 +99,24 @@ El rol pot ser `owner`, `admin` o `mod`. Fes-te `owner` tu.
 Obre `http://IP_DE_LA_VM:3000` al navegador i inicia sessió. Des de la pàgina **Usuaris** pots crear
 comptes per als amics. Després pots configurar la capçalera i el peu del TAB a la pàgina **TAB**.
 
-### Pas 6: connecta't al joc
+### Pas 6: crea el servidor
 
-A Minecraft, afegeix el servidor amb l'adreça `IP_DE_LA_VM` (port 25565, és el per defecte).
-La versió ha de ser la mateixa que `MC_VERSION` (per defecte **26.2**).
+A la pàgina **Servidors** del panell (cal ser `owner`), omple «Nou servidor»: un nom, un
+identificador curt (per exemple `survival`), el tipus **Normal (Paper)** i el port públic `25565`.
+La primera vegada baixa la imatge de Docker i pot trigar uns minuts; l'estat es va actualitzant
+sol. En acabar, el panell hi ha copiat els plugins, hi ha configurat LuckPerms i el Bridge, i ha
+creat els grups base (`membre`, `mod`, `admin`, `owner`).
+
+Si vols més d'un servidor darrere d'una sola adreça, crea primer un **Proxy (Velocity)** al port
+`25565` i després els servidors normals triant aquell proxy (sense port públic). Amb el selector
+del menú tries sobre quin servidor treballen la resta de pàgines.
+
+Cada servidor viu a `/opt/minecraft/servers/<identificador>/` (`docker-compose.yml` + `data/`).
+«Treure» un servidor n'atura el contenidor i en mou les dades a `/opt/minecraft/trash/`.
+
+### Pas 7: connecta't al joc
+
+A Minecraft, afegeix el servidor amb l'adreça `IP_DE_LA_VM` (i el port, si no és el 25565).
 
 ### Variables opcionals
 
@@ -108,22 +124,26 @@ Exporta-les abans d'executar `install.sh` per canviar els valors per defecte:
 
 | Variable | Per defecte | Què fa |
 |---|---|---|
-| `MC_VERSION` | `26.2` | Versió de Paper |
-| `MC_MEMORY` | `3G` | Memòria del servidor |
-| `MC_SERVER_NAME` | `Claude` | Nom del servidor |
 | `PANEL_ORIGIN` | `http://IP:3000` | URL pública del panell (útil si hi poses un domini) |
 | `PANEL_PORT` | `3000` | Port del panell |
+| `CLOUDFLARE_TUNNEL_TOKEN` | *(es demana)* | Token d'un túnel de Cloudflare per publicar el panell (opcional) |
 
-Exemple: `sudo MC_MEMORY=4G PANEL_PORT=8080 ./install.sh`
+**Túnel de Cloudflare (opcional).** En començar, l'instal·lador demana el token d'un túnel; deixa'l
+en blanc si no en vols. Si el poses, engega `cloudflared` en un contenidor i et demana l'adreça
+pública del panell (els formularis només funcionen des d'aquella adreça). Després, al tauler de
+Cloudflare, afegeix al túnel un *Public Hostname* que apunti a `http://localhost:3000`.
+
+Exemple: `sudo PANEL_PORT=8080 ./install.sh`
 
 ### Problemes habituals
 
 - **«no he trobat cap .jar»**: no has copiat els plugins a `deploy/plugins/` abans de l'instal·lador.
 - **El panell no respon**: mira `sudo journalctl -u panell -n 50`, i que el port 3000 estigui obert
   (`sudo ufw status`).
-- **El servidor no arrenca**: `docker logs mc-claude --tail 100`.
-- **El panell no parla amb el Bridge**: el `BRIDGE_TOKEN` de `.env` ha de coincidir amb el de
-  `/opt/minecraft/data/plugins/Bridge/config.yml`.
+- **Un servidor es queda en «Error»**: la pàgina **Servidors** en diu el motiu; mira també
+  `docker logs mc-<identificador> --tail 100` i prem «Reintentar».
+- **«el Bridge no respon»** després de crear un servidor: falta el `bridge-*.jar` a
+  `/opt/minecraft/plugins/paper/` (compila'l i torna a executar l'instal·lador).
 - **Vols tornar a executar l'instal·lador**: es pot, és pensat per repetir-se sense trencar res.
 
 ### Seguretat: què no s'ha de pujar
