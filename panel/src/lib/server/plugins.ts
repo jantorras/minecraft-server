@@ -196,3 +196,37 @@ export async function setInCatalogue(server: McServer, file: string, wanted: boo
 		throw new PluginsError('No s’ha pogut copiar el plugin al catàleg');
 	});
 }
+
+export interface CataloguePlugin {
+	file: string;
+	name: string;
+	version: string | null;
+	description: string | null;
+}
+
+/** Plugins del catàleg que aquest servidor encara no té (ni actius ni desactivats). */
+export async function listMissingFromCatalogue(server: McServer): Promise<CataloguePlugin[]> {
+	const catalogue = catalogueDir(server);
+	if (!catalogue) return [];
+	const installed = new Set((await fs.readdir(pluginsDir(server)).catch(() => [])).map(jarName));
+	const jars = (await fs.readdir(catalogue).catch(() => [])).filter((f) => f.endsWith('.jar') && !installed.has(f));
+	return Promise.all(
+		jars.sort().map(async (file) => {
+			const abs = path.join(catalogue, file);
+			const meta = await cachedMeta(abs, await fs.stat(abs));
+			return { file, name: meta.name ?? file.replace(/\.jar$/, ''), version: meta.version, description: meta.description };
+		})
+	);
+}
+
+/** Copia un plugin del catàleg a aquest servidor. */
+export async function installFromCatalogue(server: McServer, file: string): Promise<void> {
+	const catalogue = catalogueDir(server);
+	if (!catalogue) throw new PluginsError('Aquest servidor no té catàleg de plugins');
+	if (!/\.jar$/.test(file)) throw new PluginsError('Nom de plugin invàlid');
+	const target = resolveFile(server, file);
+	await fs.mkdir(path.dirname(target), { recursive: true });
+	await fs.copyFile(path.join(catalogue, file), target).catch(() => {
+		throw new PluginsError('Aquest plugin no és al catàleg');
+	});
+}

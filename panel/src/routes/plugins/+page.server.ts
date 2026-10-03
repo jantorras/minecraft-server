@@ -2,7 +2,16 @@ import { error, fail } from '@sveltejs/kit';
 import { audit } from '$lib/server/audit';
 import { field, requireRole } from '$lib/server/actions';
 import { dockerStatus } from '$lib/server/docker';
-import { PluginsError, deletePlugin, listPlugins, setInCatalogue, setPluginEnabled, uploadPlugin } from '$lib/server/plugins';
+import {
+	PluginsError,
+	deletePlugin,
+	installFromCatalogue,
+	listMissingFromCatalogue,
+	listPlugins,
+	setInCatalogue,
+	setPluginEnabled,
+	uploadPlugin
+} from '$lib/server/plugins';
 import { provisionConfigured, type McServer } from '$lib/server/servers';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -17,16 +26,20 @@ const auditTarget = (server: McServer) => (server.managed ? `servidor:${server.s
 export const load: PageServerLoad = async ({ locals }) => {
 	requireRole(locals, 'admin');
 	const server = locals.server;
-	if (!server?.dataDir) return { serverName: server?.name ?? null, pluginsEnabled: false, plugins: [], startedAt: null, canCatalogue: false };
+	if (!server?.dataDir) {
+		return { serverName: server?.name ?? null, pluginsEnabled: false, plugins: [], available: [], startedAt: null, canCatalogue: false };
+	}
 
-	const [plugins, status] = await Promise.all([
+	const [plugins, available, status] = await Promise.all([
 		listPlugins(server),
+		listMissingFromCatalogue(server),
 		server.container ? dockerStatus(server).catch(() => null) : Promise.resolve(null)
 	]);
 	return {
 		serverName: server.name,
 		pluginsEnabled: true,
 		plugins,
+		available,
 		// Un plugin canviat després d'engegar no s'aplica fins que es reinicia.
 		startedAt: status?.running ? status.startedAt : null,
 		canCatalogue: server.managed && provisionConfigured()
@@ -55,6 +68,16 @@ export const actions: Actions = {
 		if (failed) return failed;
 		audit(user, 'Pujar plugin', auditTarget(server), { file: file.name });
 		return { success: `Pujat: ${file.name}. Reinicia el servidor perquè es carregui.` };
+	},
+
+	install: async ({ request, locals }) => {
+		const user = requireRole(locals, 'admin');
+		const server = current(locals);
+		const file = field(await request.formData(), 'file');
+		const failed = await run(() => installFromCatalogue(server, file));
+		if (failed) return failed;
+		audit(user, 'Instal·lar plugin del catàleg', auditTarget(server), { file });
+		return { success: `Instal·lat: ${file}. Reinicia el servidor perquè es carregui.` };
 	},
 
 	toggle: async ({ request, locals }) => {

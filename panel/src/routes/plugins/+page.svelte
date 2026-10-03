@@ -101,6 +101,28 @@
 		</div>
 	{/if}
 
+	{#if data.available.length > 0}
+		<section class="card">
+			<h2>Disponibles al catàleg</h2>
+			<p class="muted detail">Plugins del catàleg que aquest servidor encara no té.</p>
+			<ul class="plain">
+				{#each data.available as a (a.file)}
+					<li>
+						<span>
+							<strong>{a.name}</strong>
+							{#if a.version}<span class="muted">{a.version}</span>{/if}
+							{#if a.description}<br /><span class="muted detail">{a.description}</span>{/if}
+						</span>
+						<form method="POST" action="?/install" use:enhance>
+							<input type="hidden" name="file" value={a.file} />
+							<button class="small">Instal·lar</button>
+						</form>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+
 	<section class="card">
 		<h2>Afegir un plugin</h2>
 		<form method="POST" action="?/upload" enctype="multipart/form-data" use:enhance class="row">
