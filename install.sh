@@ -221,6 +221,11 @@ chown -R "$PANEL_USER:$PANEL_USER" "$MC_ROOT/servers" "$MC_ROOT/backups" "$MC_RO
 if [ -z "${PANEL_ORIGIN:-}" ] && [ -f "$ENV_FILE" ]; then
 	PANEL_ORIGIN="$(grep -m1 '^ORIGIN=' "$ENV_FILE" | cut -d= -f2- || true)"
 fi
+# Ha de ser una URL sencera: amb només el domini, el panell no arrenca.
+if [ -n "${PANEL_ORIGIN:-}" ]; then
+	[[ "$PANEL_ORIGIN" =~ ^https?:// ]] || PANEL_ORIGIN="https://$PANEL_ORIGIN"
+	PANEL_ORIGIN="${PANEL_ORIGIN%/}"
+fi
 LAN_IP="$(hostname -I | awk '{print $1}')"
 ORIGIN="${PANEL_ORIGIN:-http://$LAN_IP:$PANEL_PORT}"
 
