@@ -122,17 +122,62 @@ function demultiplex(buf: Buffer): Buffer {
 	return Buffer.concat(parts);
 }
 
-/** Les últimes línies de la consola del contenidor (el mateix que `docker logs --tail`), en text net. */
-export async function dockerLogs(server: McServer, tail = 300): Promise<string[]> {
-	const res = await request(server, 'GET', `logs?stdout=1&stderr=1&tail=${tail}`, 10_000);
+export interface ContainerLogs {
+	lines: string[];
+	/** Marca de temps de l'última línia, per demanar després només les noves. */
+	last: string | null;
+}
+
+const LOG_STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z) ?/;
+const SINCE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d{1,9}))?Z$/;
+
+/**
+ * La consola del contenidor (el mateix que `docker logs`), en text net. Sense `since`
+ * torna les últimes línies; amb `since` (el `last` d'una crida anterior), només les noves.
+ */
+export async function dockerLogs(server: McServer, opts: { tail?: number; since?: string | null } = {}): Promise<ContainerLogs> {
+	const since = opts.since && SINCE.test(opts.since) ? opts.since : null;
+	let query = `logs?stdout=1&stderr=1&timestamps=1&tail=${opts.tail ?? 300}`;
+	if (since) {
+		const nanos = (since.match(SINCE)![1] ?? '').padEnd(9, '0');
+		query += `&since=${Math.floor(Date.parse(since) / 1000)}.${nanos}`;
+	}
+	const res = await request(server, 'GET', query, 10_000);
 	const text = demultiplex(Buffer.from(await res.arrayBuffer())).toString('utf8');
-	return (
-		text
-			// Colors i moviments de cursor de la consola.
-			.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[=>]/g, '')
-			.split(/\r?\n/)
-			// La consola redibuixa el «> » d'entrada amb retorns de carro; en queda l'últim text.
-			.map((line) => line.slice(line.lastIndexOf('\r') + 1).replace(/[\x00-\x08\x0b-\x1f]/g, ''))
-			.filter((line) => line.trim() !== '' && line.trim() !== '>')
-	);
+
+	const lines: string[] = [];
+	let last = since;
+	// Colors i moviments de cursor de la consola, fora.
+	for (const raw of text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b[=>]/g, '').split(/\r?\n/)) {
+		const stamp = raw.match(LOG_STAMP)?.[1] ?? null;
+		// `since` inclou l'última línia que ja es té: es descarta.
+		if (stamp && since && stamp <= since) continue;
+		const body = stamp ? raw.slice(raw.match(LOG_STAMP)![0].length) : raw;
+		// La consola redibuixa el «> » d'entrada amb retorns de carro; en queda l'últim text.
+		const line = body.slice(body.lastIndexOf('\r') + 1).replace(/[\x00-\x08\x0b-\x1f]/g, '');
+		if (stamp) last = stamp;
+		if (line.trim() !== '' && line.trim() !== '>') lines.push(line);
+	}
+	return { lines, last };
+}
+
+// Docker triga més d'un segon a mesurar la CPU (compara dues lectures), massa per fer-ho
+// esperar a cada càrrega de pàgina: es guarda l'última lectura i es refresca en segon pla.
+const statsCache = new Map<string, { at: number; value: ContainerStats | null; pending: boolean }>();
+
+/** L'última lectura de CPU i memòria, sense esperar. null si encara no n'hi ha cap de recent. */
+export function dockerStatsCached(server: McServer): ContainerStats | null {
+	if (!server.container) return null;
+	const key = server.container;
+	const entry = statsCache.get(key) ?? { at: 0, value: null, pending: false };
+	statsCache.set(key, entry);
+	const age = Date.now() - entry.at;
+	if (age > 1500 && !entry.pending) {
+		entry.pending = true;
+		dockerStats(server)
+			.then((value) => Object.assign(entry, { value, at: Date.now() }))
+			.catch(() => Object.assign(entry, { value: null, at: Date.now() }))
+			.finally(() => (entry.pending = false));
+	}
+	return age < 30_000 ? entry.value : null;
 }

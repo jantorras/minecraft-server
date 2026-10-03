@@ -6,6 +6,7 @@ versió concreta:
 - LuckPerms (Bukkit) — https://luckperms.net/download
 - PlaceholderAPI — https://hangar.papermc.io/HelpChat/PlaceholderAPI
 - TAB — https://github.com/NEZNAMY/TAB/releases
+- Chunky — https://modrinth.com/plugin/chunky
 
 El `.jar` del plugin Bridge (`bridge/build/libs/bridge-*.jar`) es copia automàticament,
 no cal posar-lo aquí.

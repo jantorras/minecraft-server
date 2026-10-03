@@ -79,6 +79,8 @@ export function composeFile(server: McServer): string {
 				TYPE: 'PAPER',
 				VERSION: latest ? 'LATEST' : server.version,
 				MEMORY: server.memory,
+				// Opcions de la JVM afinades per a servidors de Minecraft (menys aturades per GC).
+				USE_AIKAR_FLAGS: 'true',
 				UID: uid,
 				GID: gid,
 				MOTD: server.name,
@@ -114,6 +116,12 @@ export function composeFile(server: McServer): string {
 		'    restart: unless-stopped',
 		'    stdin_open: true',
 		'    tty: true',
+		// Sense límit, el registre del contenidor creix per sempre i omple el disc.
+		'    logging:',
+		'      driver: json-file',
+		'      options:',
+		'        max-size: "10m"',
+		'        max-file: "3"',
 		'    networks:',
 		`      - ${NETWORK}`,
 		'    ports:',

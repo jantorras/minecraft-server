@@ -22,16 +22,26 @@
 	let logError = $state<string | null>(null);
 	let terminal = $state<HTMLPreElement>();
 
+	const MAX_LINES = 500;
+	/** Marca de l'última línia rebuda: cada consulta només demana les posteriors. */
+	let last: string | null = null;
+	/** CPU i memòria en viu; fins que arriben es mostren les de la càrrega de la pàgina. */
+	let live = $state<{ cpuPercent: number | null; memUsedMB: number | null; memLimitMB: number | null; memPercent: number | null } | null>(null);
+	const meters = $derived(live ?? s);
+
 	async function refreshLogs() {
 		if (document.hidden) return;
 		try {
-			const res = await fetch('/servidor/logs');
+			const res = await fetch('/servidor/logs' + (last ? `?since=${encodeURIComponent(last)}` : ''));
 			const body = await res.json();
 			if (!res.ok) throw new Error(body.message ?? `Error ${res.status}`);
+			logError = null;
+			if (body.stats) live = body.stats;
+			if (body.last) last = body.last;
+			if (body.lines.length === 0) return;
 			// Només se segueix el final si ja s'hi era: qui ha pujat a llegir no es mou.
 			const atBottom = !terminal || terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 40;
-			lines = body.lines;
-			logError = null;
+			lines = [...lines, ...body.lines].slice(-MAX_LINES);
 			if (atBottom) {
 				await tick();
 				terminal?.scrollTo({ top: terminal.scrollHeight });
@@ -41,8 +51,15 @@
 		}
 	}
 
+	// Valors simples: l'efecte de sota només es reinicia si canvien de debò, no a cada acció.
+	const watching = $derived(data.dockerEnabled && data.mc ? data.mc.name : null);
+
 	$effect(() => {
-		if (!canControl || !data.dockerEnabled) return;
+		if (watching === null) return;
+		// En canviar de servidor es torna a començar.
+		lines = [];
+		last = null;
+		live = null;
 		refreshLogs();
 		const timer = setInterval(refreshLogs, 2000);
 		return () => clearInterval(timer);
@@ -104,16 +121,16 @@
 				<div class="meter">
 					<div class="meter-label">
 						<span>CPU</span>
-						<span>{s.cpuPercent ?? '?'}%</span>
+						<span>{meters?.cpuPercent ?? '?'}%</span>
 					</div>
-					<div class="bar"><div class="bar-fill cpu" style="width: {pct(s.cpuPercent)}%"></div></div>
+					<div class="bar"><div class="bar-fill cpu" style="width: {pct(meters?.cpuPercent ?? null)}%"></div></div>
 				</div>
 				<div class="meter">
 					<div class="meter-label">
 						<span>RAM</span>
-						<span>{s.memUsedMB ?? '?'} MB{#if s.memLimitMB} / {s.memLimitMB} MB{/if}</span>
+						<span>{meters?.memUsedMB ?? '?'} MB{#if meters?.memLimitMB} / {meters.memLimitMB} MB{/if}</span>
 					</div>
-					<div class="bar"><div class="bar-fill mem" style="width: {pct(s.memPercent)}%"></div></div>
+					<div class="bar"><div class="bar-fill mem" style="width: {pct(meters?.memPercent ?? null)}%"></div></div>
 				</div>
 			</div>
 		{/if}

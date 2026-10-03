@@ -33,7 +33,7 @@ async function creationOf(server: McServer) {
 	const progress = server.status === 'creating' ? provisionProgress(server.id) : null;
 	if (!progress) return null;
 	const booting = progress.step === 'boot' || progress.step === 'groups' || progress.step === 'proxy';
-	const log = booting ? await dockerLogs(server, 6).catch(() => []) : [];
+	const log = booting ? await dockerLogs(server, { tail: 6 }).then((l) => l.lines, () => []) : [];
 	return { ...progress, steps: provisionSteps(server), log };
 }
 

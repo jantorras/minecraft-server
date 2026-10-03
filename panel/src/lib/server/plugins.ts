@@ -91,7 +91,20 @@ function yamlKey(text: string, key: string): string | null {
 	return match ? match[1].replace(/^(['"])(.*)\1$/, '$2') : null;
 }
 
-async function readMeta(jar: string): Promise<{ name: string | null; version: string | null; description: string | null }> {
+type Meta = { name: string | null; version: string | null; description: string | null };
+
+// Obrir cada .jar a cada visita és car: es recorda el resultat mentre el fitxer no canviï.
+const metaCache = new Map<string, { size: number; mtimeMs: number; meta: Meta }>();
+
+async function cachedMeta(jar: string, stat: { size: number; mtimeMs: number }): Promise<Meta> {
+	const hit = metaCache.get(jar);
+	if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.meta;
+	const meta = await readMeta(jar);
+	metaCache.set(jar, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
+	return meta;
+}
+
+async function readMeta(jar: string): Promise<Meta> {
 	const none = { name: null, version: null, description: null };
 	try {
 		const entry = await readZipEntry(jar, ['paper-plugin.yml', 'plugin.yml', 'velocity-plugin.json']);
@@ -120,7 +133,8 @@ export async function listPlugins(server: McServer): Promise<PluginInfo[]> {
 			.filter((e) => e.isFile() && /\.jar(\.disabled)?$/.test(e.name))
 			.map(async (e): Promise<PluginInfo> => {
 				const abs = path.join(dir, e.name);
-				const [stat, meta] = await Promise.all([fs.stat(abs), readMeta(abs)]);
+				const stat = await fs.stat(abs);
+				const meta = await cachedMeta(abs, stat);
 				const name = meta.name ?? jarName(e.name).replace(/\.jar$/, '');
 				return {
 					file: e.name,

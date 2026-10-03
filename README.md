@@ -81,7 +81,7 @@ Et fa unes preguntes al principi i després va sol (triga uns minuts):
   si no en vols.
 
 Tota la resta és automàtica: instal·la Docker i Node 24; baixa l'última versió de LuckPerms,
-PlaceholderAPI i TAB; compila el plugin Bridge dins d'un contenidor (no cal Java a la VM); engega
+PlaceholderAPI, TAB i Chunky; compila el plugin Bridge dins d'un contenidor (no cal Java a la VM); engega
 MariaDB (els rols de LuckPerms, compartits per tots els servidors); compila el panell, el deixa
 com a servei `panell` i configura el tallafoc.
 
@@ -123,6 +123,20 @@ Cada servidor viu a `/opt/minecraft/servers/<identificador>/` (`docker-compose.y
 ### Pas 4: connecta't al joc
 
 A Minecraft, afegeix el servidor amb l'adreça `IP_DE_LA_VM` (i el port, si no és el 25565).
+
+### Generar el món per endavant (Chunky)
+
+Tots els servidors nous porten el plugin **Chunky**. No fa res fins que li ho demanes: genera el
+món per endavant perquè després, quan els jugadors explorin, el servidor no hagi de crear terreny
+nou (que és el que més el fa anar lent). Des de la consola de la pàgina **Servidor**:
+
+```
+chunky radius 3000
+chunky start
+```
+
+Triga una bona estona i fa servir molta CPU mentre dura; es pot aturar amb `chunky pause` i
+reprendre amb `chunky continue`. Com més gran el radi, més disc ocupa el món.
 
 ### Afegir plugins
 

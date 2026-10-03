@@ -6,7 +6,7 @@
 #   git clone https://github.com/jantorras/minecraft-server.git && cd minecraft-server && sudo ./install.sh
 #
 # Fa les preguntes al principi (usuari del panell i, si vols, túnel de Cloudflare) i la resta
-# va sola: baixa els plugins (LuckPerms, PlaceholderAPI, TAB), compila el Bridge i deixa el
+# va sola: baixa els plugins (LuckPerms, PlaceholderAPI, TAB, Chunky), compila el Bridge i deixa el
 # panell engegat. Un .jar que ja sigui a deploy/plugins/ (o deploy/plugins/velocity/ per als
 # proxys) no es torna a baixar, per si vols fixar-ne una versió concreta.
 #
@@ -78,9 +78,23 @@ apt-get install -y curl git ufw build-essential rsync openssl
 log "Docker"
 if ! command -v docker &>/dev/null; then
 	curl -fsSL https://get.docker.com | sh
+	# Límit dels registres de tots els contenidors: sense, creixen per sempre i omplen el disc.
+	# Només en una instal·lació nova de Docker, per no reiniciar contenidors que ja corrin.
+	if [ ! -f /etc/docker/daemon.json ]; then
+		echo '{ "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }' >/etc/docker/daemon.json
+		systemctl restart docker
+	fi
 else
 	echo "Ja instal·lat."
 fi
+
+# Les imatges dels servidors es baixen en segon pla mentre es fa la resta, perquè crear el
+# primer servidor des del panell no hagi d'esperar la baixada.
+PULL_PIDS=()
+for image in itzg/minecraft-server itzg/mc-proxy; do
+	docker pull -q "$image" >/dev/null 2>&1 &
+	PULL_PIDS+=("$!")
+done
 
 # ---------------------------------------------------------------------------
 log "Node.js 24"
@@ -146,6 +160,8 @@ papi_url() {
 }
 # TAB publica diversos .jar per versió; el de nom més curt és el de l'última versió de Minecraft.
 tab_url() { json https://api.github.com/repos/NEZNAMY/TAB/releases/latest "j=>j.assets.map(a=>a.browser_download_url).filter(u=>u.endsWith('.jar')).sort((a,b)=>a.length-b.length)[0]"; }
+# Chunky: genera el món per endavant (/chunky start) perquè explorar no faci anar lent el servidor.
+chunky_url() { json 'https://api.modrinth.com/v2/project/chunky/version?loaders=%5B%22paper%22%5D' "j=>(j[0].files.find(f=>f.primary)||j[0].files[0]).url"; }
 
 # fetch_plugin <carpeta> <patró del .jar que ja hi podria ser> <nom del fitxer> <url>
 fetch_plugin() {
@@ -163,6 +179,7 @@ fetch_plugin() {
 fetch_plugin "$SCRIPT_DIR/deploy/plugins" '[Ll]uck[Pp]erms*.jar' LuckPerms-Bukkit.jar "$(luckperms_url bukkit || true)"
 fetch_plugin "$SCRIPT_DIR/deploy/plugins" '[Pp]laceholder[Aa][Pp][Ii]*.jar' PlaceholderAPI.jar "$(papi_url || true)"
 fetch_plugin "$SCRIPT_DIR/deploy/plugins" 'TAB*.jar' TAB.jar "$(tab_url || true)"
+fetch_plugin "$SCRIPT_DIR/deploy/plugins" '[Cc]hunky*.jar' Chunky.jar "$(chunky_url || true)"
 fetch_plugin "$SCRIPT_DIR/deploy/plugins/velocity" '[Ll]uck[Pp]erms*.jar' LuckPerms-Velocity.jar "$(luckperms_url velocity || true)"
 
 # ---------------------------------------------------------------------------
@@ -231,7 +248,7 @@ chmod 600 "$ENV_FILE"
 log "Instal·lant i compilant el panell (npm ci + build)"
 # Es canvia de directori abans del sudo: l'usuari «$PANEL_USER» no pot entrar a la carpeta des
 # d'on s'executa l'script (el home de qui l'ha clonat) i fallaria amb «Permission denied».
-(cd "$PANEL_DIR/app/panel" && sudo -H -u "$PANEL_USER" bash -c "npm ci && npm run build")
+(cd "$PANEL_DIR/app/panel" && sudo -H -u "$PANEL_USER" bash -c "npm ci --no-audit --no-fund && npm run build")
 
 if [ -n "$PANEL_ADMIN_USER" ]; then
 	log "Usuari «$PANEL_ADMIN_USER» (owner) del panell"
@@ -250,7 +267,8 @@ After=network.target docker.service
 [Service]
 User=$PANEL_USER
 WorkingDirectory=$PANEL_DIR/app/panel
-ExecStart=/usr/bin/npm start
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --env-file-if-exists=.env build
 Restart=on-failure
 
 [Install]
@@ -289,6 +307,12 @@ log "Tallafoc"
 ufw allow OpenSSH
 ufw allow "$PANEL_PORT"/tcp
 ufw --force enable
+
+# ---------------------------------------------------------------------------
+log "Acabant de baixar les imatges dels servidors"
+for pid in "${PULL_PIDS[@]}"; do
+	wait "$pid" || echo "Avís: no s'ha pogut baixar una imatge; es baixarà en crear el primer servidor."
+done
 
 # ---------------------------------------------------------------------------
 log "Fet!"

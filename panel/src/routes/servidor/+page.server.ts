@@ -1,6 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { bridge, BridgeError } from '$lib/server/bridge';
-import { DockerError, dockerRestart, dockerStart, dockerStats, dockerStatus, dockerStop } from '$lib/server/docker';
+import { DockerError, dockerRestart, dockerStart, dockerStatsCached, dockerStatus, dockerStop } from '$lib/server/docker';
 import type { McServer } from '$lib/server/servers';
 import { RconError, rconCommand, rconConfigured } from '$lib/server/rcon';
 import { mcMaxPlayers } from '$lib/server/mcfiles';
@@ -35,8 +35,9 @@ async function loadServer(mc: McServer | null): Promise<{ server: ServerView | n
 	if (!mc?.container) return { server: null, error: null };
 	try {
 		const status = await dockerStatus(mc);
-		const [stats, max, health] = await Promise.all([
-			status.running ? dockerStats(mc) : Promise.resolve(null),
+		// CPU i memòria: l'última lectura que hi hagi; la pàgina les va actualitzant després.
+		const stats = status.running ? dockerStatsCached(mc) : null;
+		const [max, health] = await Promise.all([
 			mcMaxPlayers(mc),
 			status.running && mc.bridgeUrl ? bridge.health().catch(() => null) : Promise.resolve(null)
 		]);
