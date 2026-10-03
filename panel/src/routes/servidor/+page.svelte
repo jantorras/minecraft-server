@@ -5,7 +5,6 @@
 	import { formatDate } from '$lib/format';
 	import { hasRole } from '$lib/roles';
 	import { invalidateAll } from '$app/navigation';
-	import { DIFFICULTIES, DIFFICULTY_LABELS, GAMEMODES, GAMEMODE_LABELS } from '$lib/servers';
 
 	let { data, form } = $props();
 
@@ -74,14 +73,6 @@
 		const timer = setInterval(invalidateAll, 3000);
 		return () => clearInterval(timer);
 	});
-
-	const TOGGLES = [
-		{ name: 'pvp', label: 'PvP', text: 'Els jugadors es poden fer mal entre ells.' },
-		{ name: 'whitelist', label: 'Llista blanca', text: 'Només hi entren els jugadors de la llista.' },
-		{ name: 'allowFlight', label: 'Permetre volar', text: 'No expulsa qui vola en supervivència (cal amb alguns plugins).' },
-		{ name: 'allowNether', label: 'Nether', text: 'Es pot anar al Nether.' },
-		{ name: 'hardcore', label: 'Hardcore', text: 'Qui mor passa a espectador.' }
-	] as const;
 
 	const statusLabel = $derived(!s ? '—' : s.running ? 'Encès' : s.exitedWithError ? 'Ha petat' : 'Aturat');
 </script>
@@ -175,104 +166,8 @@
 		{/if}
 	</section>
 
-	{#if canControl && data.settings}
-		{@const g = data.settings}
-		<section class="card">
-			<h2>Opcions del joc</h2>
-			<form
-				method="POST"
-				action="?/settings"
-				class="settings"
-				use:enhance={({ cancel }) => {
-					if (!confirm('Per aplicar les opcions el servidor es reinicia i els jugadors es desconnecten. Continuar?')) cancel();
-				}}
-			>
-				<label class="wide">
-					Missatge a la llista de servidors (MOTD)
-					<input name="motd" value={g.motd} required maxlength="120" />
-				</label>
-
-				<div class="group">
-					<span class="group-label">Dificultat</span>
-					<div class="seg">
-						{#each DIFFICULTIES as d (d)}
-							<label class="seg-item"><input type="radio" name="difficulty" value={d} checked={g.difficulty === d} /><span>{DIFFICULTY_LABELS[d]}</span></label>
-						{/each}
-					</div>
-				</div>
-				<div class="group">
-					<span class="group-label">Mode de joc per defecte</span>
-					<div class="seg">
-						{#each GAMEMODES as m (m)}
-							<label class="seg-item"><input type="radio" name="gamemode" value={m} checked={g.gamemode === m} /><span>{GAMEMODE_LABELS[m]}</span></label>
-						{/each}
-					</div>
-				</div>
-
-				<div class="numbers">
-					<label>Màxim de jugadors <input name="maxPlayers" type="number" min="1" max="1000" value={g.maxPlayers} required /></label>
-					<label>
-						Distància de visió
-						<input name="viewDistance" type="number" min="2" max="32" value={g.viewDistance} required />
-						<span class="muted hint">chunks que veu cada jugador</span>
-					</label>
-					<label>
-						Distància de simulació
-						<input name="simulationDistance" type="number" min="2" max="32" value={g.simulationDistance} required />
-						<span class="muted hint">chunks on passen coses (cultius, mobs)</span>
-					</label>
-					<label>
-						Protecció de l’inici
-						<input name="spawnProtection" type="number" min="0" max="256" value={g.spawnProtection} required />
-						<span class="muted hint">blocs on només construeixen els operadors</span>
-					</label>
-				</div>
-
-				<div class="toggles">
-					{#each TOGGLES as t (t.name)}
-						<label class="toggle">
-							<input type="checkbox" name={t.name} checked={g[t.name]} />
-							<span><strong>{t.label}</strong><span class="muted hint">{t.text}</span></span>
-						</label>
-					{/each}
-				</div>
-
-				<div class="row">
-					<button>Desar i reiniciar</button>
-					<span class="muted hint">Baixar les distàncies és el que més alleugereix un servidor que va just.</span>
-				</div>
-			</form>
-		</section>
-
-		<section class="card">
-			<h2>Llista blanca</h2>
-			{#if !g.whitelist}
-				<p class="muted">Està desactivada: hi pot entrar tothom. S’activa a «Opcions del joc».</p>
-			{/if}
-			{#if data.whitelist === null}
-				<p class="muted">Engega el servidor per veure i canviar els jugadors de la llista.</p>
-			{:else}
-				{#if data.whitelist.length === 0}
-					<p class="muted">Encara no hi ha ningú a la llista.</p>
-				{:else}
-					<div class="names">
-						{#each data.whitelist as player (player)}
-							<form method="POST" action="?/whitelist" use:enhance class="name">
-								<input type="hidden" name="player" value={player} />
-								<input type="hidden" name="op" value="remove" />
-								<span>{player}</span>
-								<button class="secondary small" title="Treure {player}" aria-label="Treure {player}">✕</button>
-							</form>
-						{/each}
-					</div>
-				{/if}
-				<form method="POST" action="?/whitelist" use:enhance class="row" style="margin-top: 0.75rem">
-					<input type="hidden" name="op" value="add" />
-					<label>Nom del jugador <input name="player" required maxlength="32" autocomplete="off" /></label>
-					<button style="margin-bottom: 0.75rem">Afegir</button>
-				</form>
-			{/if}
-		</section>
+	{#if canControl && data.mc?.status === 'ready'}
+		<p><a href="/opcions">Opcions del joc: missatge, jugadors, dificultat, llista blanca… →</a></p>
 	{/if}
 
 	{#if canControl}
@@ -323,100 +218,6 @@
 {/if}
 
 <style>
-	.settings {
-		display: flex;
-		flex-direction: column;
-		gap: 0.9rem;
-	}
-	.settings label {
-		margin: 0;
-	}
-	.wide input {
-		width: 100%;
-	}
-	.group-label {
-		display: block;
-		font-size: 0.88rem;
-		margin-bottom: 0.3rem;
-	}
-	.hint {
-		font-size: 0.8rem;
-	}
-	.seg {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.3rem;
-	}
-	.seg-item {
-		flex-direction: row;
-		cursor: pointer;
-	}
-	.seg-item input {
-		position: absolute;
-		opacity: 0;
-		pointer-events: none;
-	}
-	.seg-item span {
-		padding: 0.4rem 0.8rem;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius);
-		background: var(--bg);
-		box-shadow:
-			inset 1px 1px 0 var(--bevel-light),
-			inset -1px -1px 0 var(--bevel-dark);
-	}
-	.seg-item input:checked + span {
-		background: var(--accent);
-		color: var(--accent-text);
-		border-color: var(--accent-strong);
-	}
-	.seg-item input:focus-visible + span {
-		outline: 2px solid var(--accent);
-		outline-offset: 1px;
-	}
-	.numbers {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-		gap: 0.8rem;
-	}
-	.toggles {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-		gap: 0.5rem;
-	}
-	.toggle {
-		flex-direction: row;
-		align-items: flex-start;
-		gap: 0.6rem;
-		padding: 0.55rem 0.7rem;
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg);
-		cursor: pointer;
-	}
-	.toggle input {
-		margin-top: 0.2rem;
-	}
-	.toggle span {
-		display: flex;
-		flex-direction: column;
-	}
-	.names {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-	}
-	.name {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		padding: 0.2rem 0.3rem 0.2rem 0.6rem;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius);
-		background: var(--bg);
-		font-family: var(--font-mc);
-		font-size: 0.88rem;
-	}
 	.terminal {
 		height: 26rem;
 		overflow: auto;

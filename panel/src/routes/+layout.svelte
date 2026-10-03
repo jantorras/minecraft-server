@@ -12,6 +12,7 @@
 		{ href: '/servidors', label: 'Servidors', icon: 'servers' },
 		...(hasRole(data.user, 'admin')
 			? [
+					{ href: '/opcions', label: 'Opcions', icon: 'options' },
 					{ href: '/fitxers', label: 'Fitxers', icon: 'files' },
 					{ href: '/plugins', label: 'Plugins', icon: 'plugins' }
 				]
@@ -71,6 +72,10 @@
 									<rect x="11" y="3" width="6.5" height="6" rx="1" stroke="currentColor" stroke-width="1.6" />
 									<rect x="2.5" y="11" width="6.5" height="6" rx="1" stroke="currentColor" stroke-width="1.6" />
 									<path d="M14.25 11.5v5M11.75 14h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+								{:else if link.icon === 'options'}
+									<path d="M3 6h7M14 6h3M3 14h3M10 14h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+									<circle cx="12" cy="6" r="2" stroke="currentColor" stroke-width="1.6" />
+									<circle cx="8" cy="14" r="2" stroke="currentColor" stroke-width="1.6" />
 								{:else if link.icon === 'files'}
 									<path d="M3 5.5a1 1 0 0 1 1-1h3.5l1.3 1.6H16a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
 								{:else if link.icon === 'plugins'}

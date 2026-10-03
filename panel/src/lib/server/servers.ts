@@ -71,7 +71,9 @@ interface Row {
 }
 
 /** Opcions de partida d'un servidor nou. Un món buit és una sala d'espera: sense monstres ni trencar res. */
-export function defaultSettings(name: string, worldType: WorldType): GameSettings {
+export function defaultSettings(name: string, type: ServerType, worldType: WorldType): GameSettings {
+	// Als proxys no es fixa res fins que algú ho canviï: mana el que hi hagi a velocity.toml.
+	if (type === 'velocity') return {};
 	return worldType === 'void'
 		? { motd: name, difficulty: 'peaceful', gamemode: 'adventure', spawnProtection: 0 }
 		: { motd: name };
@@ -83,7 +85,7 @@ function parseSettings(r: Row): GameSettings {
 	} catch {
 		// Un valor corrupte no ha de deixar el servidor inservible: es torna als de partida.
 	}
-	return defaultSettings(r.name, r.world_type);
+	return defaultSettings(r.name, r.type, r.world_type);
 }
 
 /** Ports només per a 127.0.0.1, derivats de l'id (que no es reutilitza mai). */
@@ -235,7 +237,7 @@ export function insertServer(s: NewServer): McServer {
 			s.worldType,
 			s.platformSize,
 			s.pregenRadius,
-			JSON.stringify(defaultSettings(s.name, s.worldType)),
+			JSON.stringify(defaultSettings(s.name, s.type, s.worldType)),
 			Date.now()
 		);
 	return getServer(Number(lastInsertRowid))!;

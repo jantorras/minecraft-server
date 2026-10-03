@@ -248,8 +248,8 @@ export function patchVelocityToml(current: string | null, proxy: McServer, backe
 			'# Creat pel panell. Pots editar-lo, però la secció [servers] la reescriu el panell.',
 			'config-version = "2.7"',
 			`bind = "0.0.0.0:${VELOCITY_PORT}"`,
-			`motd = ${JSON.stringify(`<#09add3>${proxy.name}`)}`,
-			'show-max-players = 100',
+			`motd = ${JSON.stringify(proxy.settings.motd || `<#09add3>${proxy.name}`)}`,
+			`show-max-players = ${proxy.settings.maxPlayers ?? 100}`,
 			'online-mode = true',
 			'force-key-authentication = true',
 			'player-info-forwarding-mode = "modern"',
@@ -259,7 +259,11 @@ export function patchVelocityToml(current: string | null, proxy: McServer, backe
 			''
 		].join('\n');
 	}
-	const normalized = current.replace(/\r\n/g, '\n');
+	let normalized = current.replace(/\r\n/g, '\n');
+	// El missatge i el màxim de jugadors que es veuen a la llista de servidors, si s'han fixat al panell.
+	const { motd, maxPlayers } = proxy.settings;
+	if (motd) normalized = normalized.replace(/^motd\s*=.*$/m, () => `motd = ${JSON.stringify(motd)}`);
+	if (maxPlayers !== undefined) normalized = normalized.replace(/^show-max-players\s*=.*$/m, () => `show-max-players = ${maxPlayers}`);
 	const section = /^\[servers\]\n[\s\S]*?(?=^\[|(?![\s\S]))/m;
 	if (!section.test(normalized)) return `${normalized.trimEnd()}\n\n${velocityServers(backends)}`;
 	return normalized.replace(section, () => velocityServers(backends));
@@ -408,9 +412,10 @@ async function prepareWorld(server: McServer): Promise<string | null> {
 				placed = /filled|block/i.test(await rcon(`fill ${lo} ${PLATFORM_Y} ${lo} ${hi} ${PLATFORM_Y} ${hi} minecraft:smooth_stone`));
 			}
 			await rcon(`setworldspawn 0 ${PLATFORM_Y + 1} 0`);
-			// Que tothom aparegui al centre i no al voltant (on no hi ha terra). El nom de la
-			// regla depèn de la versió; la que no existeixi es descarta sola.
-			await rcon('gamerule spawn_radius 0');
+			// Que tothom aparegui al centre i no al voltant (on no hi ha terra): per defecte el joc
+			// reparteix els jugadors en un radi de 10 blocs. El nom de la regla depèn de la versió;
+			// la que no existeixi es descarta sola.
+			await rcon('gamerule respawn_radius 0');
 			await rcon('gamerule spawnRadius 0');
 			await rcon(`forceload remove ${lo} ${lo} ${hi} ${hi}`);
 			if (!placed) return 'No s’ha pogut col·locar la plataforma; posa-la a mà amb /fill des de la consola.';
@@ -433,7 +438,7 @@ const needsWorldSetup = (server: McServer) =>
 	server.type === 'paper' && !server.setupDone && (server.worldType === 'void' || server.pregenRadius !== null);
 
 /** Reescriu la llista de servidors d'un proxy i el reinicia perquè la llegeixi. */
-async function refreshProxy(proxyId: number | null): Promise<void> {
+export async function refreshProxy(proxyId: number | null): Promise<void> {
 	const proxy = proxyId === null ? null : getServer(proxyId);
 	if (!proxy || !(await exists(proxy.dataDir!))) return;
 	// Reiniciar el proxy desconnecta tothom: només si la llista de servidors ha canviat.

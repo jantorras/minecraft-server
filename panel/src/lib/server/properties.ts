@@ -41,3 +41,19 @@ export async function effectiveSettings(server: McServer): Promise<Required<Game
 		spawnProtection: s.spawnProtection ?? number('spawn-protection', 16)
 	};
 }
+
+/** El missatge i el màxim de jugadors que un proxy ensenya a la llista de servidors. */
+export async function effectiveProxySettings(server: McServer): Promise<{ motd: string; maxPlayers: number }> {
+	const raw = server.dataDir ? await fs.readFile(path.join(server.dataDir, 'velocity.toml'), 'utf8').catch(() => '') : '';
+	let motd = server.name;
+	const line = /^motd\s*=\s*(".*")\s*$/m.exec(raw)?.[1];
+	if (line) {
+		try {
+			motd = JSON.parse(line) as string;
+		} catch {
+			// Una cadena TOML que no és JSON vàlid: es deixa el nom.
+		}
+	}
+	const max = Number(/^show-max-players\s*=\s*(\d+)/m.exec(raw)?.[1] ?? 100);
+	return { motd: server.settings.motd ?? motd, maxPlayers: server.settings.maxPlayers ?? max };
+}
